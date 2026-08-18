@@ -1,0 +1,98 @@
+import { z } from 'zod';
+
+const positiveIntegerString = z.string().regex(/^[1-9]\d*$/);
+
+
+const chipValueSchema = z.object({
+  amount: positiveIntegerString,
+  display_order: z.number().int().min(1).max(100),
+  is_enabled: z.boolean().default(true),
+});
+
+const optionSchema = z.object({
+  code: z.string().trim().min(2).max(50).regex(/^[A-Z0-9_]+$/),
+  name: z.string().trim().min(1).max(100),
+  image_url: z.string().trim().url().optional().nullable(),
+  display_order: z.number().int().min(1).max(100),
+  payout_numerator: positiveIntegerString,
+  payout_denominator: positiveIntegerString.default('1'),
+  probability_weight: positiveIntegerString,
+  is_enabled: z.boolean().default(true),
+});
+
+export const createGreedyConfigSchema = z.object({
+  body: z
+    .object({
+      betting_duration_ms: z.number().int().min(3000).max(120000),
+      lock_duration_ms: z.number().int().min(250).max(10000),
+      drawing_duration_ms: z.number().int().min(1000).max(30000),
+      result_duration_ms: z.number().int().min(1000).max(30000),
+      min_bet: positiveIntegerString,
+      max_single_bet: positiveIntegerString,
+      max_round_bet: positiveIntegerString,
+      notes: z.string().trim().max(500).optional(),
+      chip_values: z.array(chipValueSchema).min(1).max(12),
+      options: z.array(optionSchema).length(8),
+    })
+    .superRefine((value, ctx) => {
+      const min_bet = BigInt(value.min_bet);
+      const max_single_bet = BigInt(value.max_single_bet);
+      const max_round_bet = BigInt(value.max_round_bet);
+      if (min_bet > max_single_bet) {
+        ctx.addIssue({ code: 'custom', path: ['max_single_bet'], message: 'max_single_bet must be >= min_bet' });
+      }
+      if (max_single_bet > max_round_bet) {
+        ctx.addIssue({ code: 'custom', path: ['max_round_bet'], message: 'max_round_bet must be >= max_single_bet' });
+      }
+      const chip_amounts = new Set(value.chip_values.map((item) => item.amount));
+      const chip_orders = new Set(value.chip_values.map((item) => item.display_order));
+      if (chip_amounts.size !== value.chip_values.length) {
+        ctx.addIssue({ code: 'custom', path: ['chip_values'], message: 'Chip amounts must be unique' });
+      }
+      if (chip_orders.size !== value.chip_values.length) {
+        ctx.addIssue({ code: 'custom', path: ['chip_values'], message: 'Chip display_order values must be unique' });
+      }
+
+      const codes = new Set(value.options.map((item) => item.code));
+      const orders = new Set(value.options.map((item) => item.display_order));
+      if (codes.size !== value.options.length) {
+        ctx.addIssue({ code: 'custom', path: ['options'], message: 'Option codes must be unique' });
+      }
+      if (orders.size !== value.options.length) {
+        ctx.addIssue({ code: 'custom', path: ['options'], message: 'Option display_order values must be unique' });
+      }
+
+      const enabled = value.options.filter((item) => item.is_enabled);
+      const total_weight = enabled.reduce(
+        (sum, item) => sum + BigInt(item.probability_weight),
+        0n,
+      );
+      if (total_weight <= 0n) {
+        ctx.addIssue({ code: 'custom', path: ['options'], message: 'Enabled options must have positive total probability weight' });
+      } else {
+        for (const option of enabled) {
+          const weight = BigInt(option.probability_weight);
+          const numerator = BigInt(option.payout_numerator);
+          const denominator = BigInt(option.payout_denominator);
+          if (weight * numerator > total_weight * denominator) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['options'],
+              message: `${option.code} has an expected payout above 100% and is blocked by the safety validator`,
+            });
+          }
+        }
+      }
+    }),
+});
+
+export const configParamSchema = z.object({
+  params: z.object({ config_id: z.string().trim().cuid() }),
+});
+
+export const cancelRoundSchema = z.object({
+  body: z.object({ reason: z.string().trim().min(3).max(250) }),
+});
+
+export type CreateGreedyConfigBody = z.infer<typeof createGreedyConfigSchema>['body'];
+export type CancelRoundBody = z.infer<typeof cancelRoundSchema>['body'];

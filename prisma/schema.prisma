@@ -1,0 +1,478 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GameStatus {
+  active
+  paused
+  maintenance
+  disabled
+
+  @@map("game_status")
+}
+
+enum GreedyRuntimeStatus {
+  stopped
+  running
+  paused
+  degraded
+
+  @@map("greedy_runtime_status")
+}
+
+enum ConfigVersionStatus {
+  draft
+  published
+  retired
+
+  @@map("config_version_status")
+}
+
+enum GreedyRoundStatus {
+  created
+  betting_open
+  betting_locked
+  result_ready
+  drawing
+  result_revealed
+  settling
+  settled
+  closed
+  cancelled
+
+  @@map("greedy_round_status")
+}
+
+enum WalletLedgerType {
+  bet_debit
+  win_credit
+  bet_refund
+  admin_credit
+  admin_debit
+  bonus_credit
+  purchase_credit
+  withdrawal_debit
+  reversal_credit
+  reversal_debit
+
+  @@map("wallet_ledger_type")
+}
+
+enum SettlementOutcome {
+  win
+  loss
+  refunded
+
+  @@map("settlement_outcome")
+}
+
+enum IdempotencyStatus {
+  processing
+  completed
+  failed
+
+  @@map("idempotency_status")
+}
+
+enum OutboxStatus {
+  pending
+  processing
+  published
+  failed
+
+  @@map("outbox_status")
+}
+
+enum AuditActorType {
+  system
+  admin
+  user
+
+  @@map("audit_actor_type")
+}
+
+model Currency {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  symbol     String?
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  wallets Wallet[]
+
+  @@map("currencies")
+}
+
+model Wallet {
+  id          String   @id @default(cuid())
+  user_id     String
+  currency_id String
+  balance     BigInt   @default(0)
+  version     Int      @default(0)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  currency Currency       @relation(fields: [currency_id], references: [id], onDelete: Restrict)
+  ledger   WalletLedger[]
+  bets     GreedyBet[]
+  payouts  GreedyUserPayout[]
+  refunds  GreedyUserRefund[]
+
+  @@unique([user_id, currency_id])
+  @@index([user_id])
+  @@map("wallets")
+}
+
+model WalletLedger {
+  id               String           @id @default(cuid())
+  wallet_id        String
+  user_id          String
+  game_id          String?
+  type             WalletLedgerType
+  amount           BigInt
+  balance_before   BigInt
+  balance_after    BigInt
+  reference_type   String?
+  reference_id     String?
+  idempotency_key  String?
+  metadata         Json?
+  created_at       DateTime         @default(now())
+
+  wallet Wallet @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  game   Game?  @relation(fields: [game_id], references: [id], onDelete: Restrict)
+
+  debit_bet GreedyBet?        @relation("bet_debit_ledger")
+  payout    GreedyUserPayout? @relation("payout_ledger")
+  refund    GreedyUserRefund? @relation("refund_ledger")
+
+  @@index([wallet_id, created_at])
+  @@index([user_id, created_at])
+  @@index([game_id, created_at])
+  @@index([reference_type, reference_id])
+  @@map("wallet_ledger")
+}
+
+model Game {
+  id         String     @id @default(cuid())
+  code       String     @unique
+  name       String
+  status     GameStatus @default(active)
+  created_at DateTime   @default(now())
+  updated_at DateTime   @updatedAt
+
+  wallet_ledger          WalletLedger[]
+  greedy_runtime_state   GreedyRuntimeState?
+  greedy_config_versions GreedyConfigVersion[]
+  greedy_rounds          GreedyRound[]
+  greedy_bets            GreedyBet[]
+
+  @@map("games")
+}
+
+model GreedyRuntimeState {
+  id                       String              @id @default(cuid())
+  game_id                  String              @unique
+  current_round_id         String?             @unique
+  active_config_version_id String?
+  status                   GreedyRuntimeStatus @default(stopped)
+  last_round_number        BigInt              @default(0)
+  revision                 BigInt              @default(0)
+  updated_at               DateTime            @updatedAt
+  created_at               DateTime            @default(now())
+
+  game                  Game                 @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  current_round         GreedyRound?         @relation("runtime_current_round", fields: [current_round_id], references: [id], onDelete: SetNull)
+  active_config_version GreedyConfigVersion? @relation("runtime_active_config", fields: [active_config_version_id], references: [id], onDelete: Restrict)
+
+  @@map("greedy_runtime_state")
+}
+
+model GreedyConfigVersion {
+  id                     String              @id @default(cuid())
+  game_id                String
+  version                Int
+  status                 ConfigVersionStatus @default(draft)
+  betting_duration_ms    Int
+  lock_duration_ms       Int
+  drawing_duration_ms    Int
+  result_duration_ms     Int
+  min_bet                BigInt
+  max_single_bet         BigInt
+  max_round_bet          BigInt
+  created_by             String?
+  notes                  String?
+  created_at             DateTime            @default(now())
+  updated_at             DateTime            @updatedAt
+  published_at           DateTime?
+  retired_at             DateTime?
+
+  game                   Game                 @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  options                GreedyOptionVersion[]
+  chip_values            GreedyChipValueVersion[]
+  rounds                 GreedyRound[]
+  results                GreedyRoundResult[]
+  active_runtime_states  GreedyRuntimeState[] @relation("runtime_active_config")
+
+  @@unique([game_id, version])
+  @@index([game_id, status])
+  @@map("greedy_config_versions")
+}
+
+
+model GreedyChipValueVersion {
+  id                String   @id @default(cuid())
+  config_version_id String
+  amount            BigInt
+  display_order     Int
+  is_enabled        Boolean  @default(true)
+  created_at        DateTime @default(now())
+
+  config_version GreedyConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+
+  @@unique([config_version_id, amount])
+  @@unique([config_version_id, display_order])
+  @@index([config_version_id, is_enabled])
+  @@map("greedy_chip_value_versions")
+}
+
+model GreedyOptionVersion {
+  id                    String   @id @default(cuid())
+  config_version_id     String
+  code                  String
+  name                  String
+  image_url             String?
+  display_order         Int
+  payout_numerator      BigInt
+  payout_denominator    BigInt   @default(1)
+  probability_weight    BigInt
+  is_enabled            Boolean  @default(true)
+  created_at            DateTime @default(now())
+
+  config_version GreedyConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  bets           GreedyBet[]
+  winning_results GreedyRoundResult[] @relation("winning_option")
+
+  @@unique([config_version_id, code])
+  @@unique([config_version_id, display_order])
+  @@index([config_version_id, is_enabled])
+  @@map("greedy_option_versions")
+}
+
+model GreedyRound {
+  id                    String            @id @default(cuid())
+  game_id               String
+  round_number          BigInt
+  config_version_id     String
+  status                GreedyRoundStatus @default(created)
+  betting_started_at    DateTime?
+  betting_ends_at       DateTime?
+  locked_at             DateTime?
+  result_generated_at   DateTime?
+  drawing_started_at    DateTime?
+  result_reveal_at      DateTime?
+  settlement_started_at DateTime?
+  settled_at            DateTime?
+  closed_at             DateTime?
+  cancelled_at          DateTime?
+  cancellation_reason   String?
+  created_at            DateTime          @default(now())
+  updated_at            DateTime          @updatedAt
+
+  game           Game                @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  config_version GreedyConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  result         GreedyRoundResult?
+  bets           GreedyBet[]
+  settlements    GreedyBetSettlement[]
+  payouts        GreedyUserPayout[]
+  refunds        GreedyUserRefund[]
+  runtime_current GreedyRuntimeState? @relation("runtime_current_round")
+
+  @@unique([game_id, round_number])
+  @@index([game_id, status])
+  @@index([status, betting_ends_at])
+  @@index([created_at])
+  @@map("greedy_rounds")
+}
+
+model GreedyRoundResult {
+  id                        String   @id @default(cuid())
+  round_id                  String   @unique
+  winning_option_version_id String
+  algorithm_version         String
+  config_version_id         String
+  entropy_digest            String
+  audit_hash                String
+  generated_at              DateTime @default(now())
+  revealed_at               DateTime?
+
+  round          GreedyRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  winning_option GreedyOptionVersion @relation("winning_option", fields: [winning_option_version_id], references: [id], onDelete: Restrict)
+  config_version GreedyConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  settlements    GreedyBetSettlement[]
+
+  @@index([generated_at])
+  @@map("greedy_round_results")
+}
+
+model GreedyBet {
+  id                      String   @id @default(cuid())
+  game_id                 String
+  round_id                String
+  user_id                 String
+  wallet_id               String
+  option_version_id       String
+  amount                  BigInt
+  payout_numerator        BigInt
+  payout_denominator      BigInt
+  client_request_id       String
+  wallet_debit_ledger_id  String   @unique
+  accepted_at             DateTime @default(now())
+  created_at              DateTime @default(now())
+
+  game          Game                @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  round         GreedyRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet        Wallet              @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  option        GreedyOptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
+  debit_ledger  WalletLedger        @relation("bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  settlement    GreedyBetSettlement?
+
+  @@unique([user_id, client_request_id])
+  @@index([round_id, user_id])
+  @@index([round_id, option_version_id])
+  @@index([user_id, created_at])
+  @@map("greedy_bets")
+}
+
+model GreedyBetSettlement {
+  id            String            @id @default(cuid())
+  round_id      String
+  bet_id        String            @unique
+  result_id     String?
+  outcome       SettlementOutcome
+  payout_amount BigInt            @default(0)
+  settled_at    DateTime          @default(now())
+
+  round  GreedyRound       @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  bet    GreedyBet         @relation(fields: [bet_id], references: [id], onDelete: Restrict)
+  result GreedyRoundResult? @relation(fields: [result_id], references: [id], onDelete: Restrict)
+
+  @@index([round_id, outcome])
+  @@map("greedy_bet_settlements")
+}
+
+model GreedyUserPayout {
+  id                    String   @id @default(cuid())
+  round_id              String
+  user_id               String
+  wallet_id             String
+  winning_bet_count     Int
+  total_winning_stake   BigInt
+  total_payout          BigInt
+  wallet_ledger_id      String   @unique
+  created_at            DateTime @default(now())
+
+  round        GreedyRound  @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet       Wallet       @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation("payout_ledger", fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([round_id, user_id])
+  @@index([user_id, created_at])
+  @@map("greedy_user_payouts")
+}
+
+model GreedyUserRefund {
+  id               String   @id @default(cuid())
+  round_id         String
+  user_id          String
+  wallet_id        String
+  total_bet_amount BigInt
+  wallet_ledger_id String   @unique
+  created_at       DateTime @default(now())
+
+  round         GreedyRound  @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet        Wallet       @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation("refund_ledger", fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([round_id, user_id])
+  @@index([user_id, created_at])
+  @@map("greedy_user_refunds")
+}
+
+model IdempotencyRecord {
+  id              String            @id @default(cuid())
+  user_id         String
+  scope           String
+  idempotency_key String
+  request_hash    String
+  status          IdempotencyStatus @default(processing)
+  http_status     Int?
+  response_body   Json?
+  expires_at      DateTime
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  @@unique([user_id, scope, idempotency_key])
+  @@index([expires_at])
+  @@map("idempotency_records")
+}
+
+model OutboxEvent {
+  id             String       @id @default(cuid())
+  aggregate_type String
+  aggregate_id   String
+  event_type     String
+  socket_room    String?
+  payload        Json
+  status         OutboxStatus @default(pending)
+  attempt_count  Int          @default(0)
+  available_at   DateTime     @default(now())
+  locked_at      DateTime?
+  locked_by      String?
+  created_at     DateTime     @default(now())
+  published_at   DateTime?
+  last_error     String?
+
+  @@index([status, available_at])
+  @@index([locked_by, locked_at])
+  @@map("outbox_events")
+}
+
+model WorkerLease {
+  id            String   @id @default(cuid())
+  lease_key     String   @unique
+  owner_id      String
+  fencing_token BigInt   @default(0)
+  lease_until   DateTime
+  heartbeat_at  DateTime
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@map("worker_leases")
+}
+
+model AuditLog {
+  id           String         @id @default(cuid())
+  actor_type   AuditActorType
+  actor_id     String?
+  action       String
+  entity_type  String
+  entity_id    String?
+  old_values   Json?
+  new_values   Json?
+  ip_address   String?
+  user_agent   String?
+  request_id   String?
+  created_at   DateTime       @default(now())
+
+  @@index([entity_type, entity_id, created_at])
+  @@index([actor_id, created_at])
+  @@map("audit_logs")
+}

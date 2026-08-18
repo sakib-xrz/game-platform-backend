@@ -1,0 +1,21 @@
+### dotenv ###
+.env
+.env.production
+
+### node ###
+node_modules
+
+### dist/test ###
+dist
+coverage
+
+### generated ###
+src/generated/prisma
+
+### logs ###
+*.log
+
+### lockfiles ###
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
