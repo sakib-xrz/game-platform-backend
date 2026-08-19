@@ -1,11 +1,14 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import {
+  AdminRole,
+  AdminStatus,
   ConfigVersionStatus,
   GameStatus,
   GreedyRuntimeStatus,
   PrismaClient,
 } from '../src/generated/prisma/client';
+import { hashAdminPassword, normalizeAdminEmail } from '../src/modules/admin/admin.crypto';
 
 const database_url = process.env.DATABASE_URL;
 
@@ -39,7 +42,7 @@ const main = async (): Promise<void> => {
       data: {
         game_id: game.id,
         version: 1,
-        status: ConfigVersionStatus.published,
+        status: ConfigVersionStatus.draft,
         betting_duration_ms: 15000,
         lock_duration_ms: 1000,
         drawing_duration_ms: 4000,
@@ -49,7 +52,6 @@ const main = async (): Promise<void> => {
         max_round_bet: 50000n,
         notes:
           'Technical baseline. Replace names/images/economy before public launch.',
-        published_at: new Date(),
         chip_values: {
           create: [
             { amount: 10n, display_order: 1 },
@@ -131,6 +133,20 @@ const main = async (): Promise<void> => {
       },
       include: { options: true },
     });
+
+    greedy_config = await prisma.greedyConfigVersion.update({
+      where: { id: greedy_config.id },
+      data: { status: ConfigVersionStatus.review_pending },
+      include: { options: true },
+    });
+    greedy_config = await prisma.greedyConfigVersion.update({
+      where: { id: greedy_config.id },
+      data: {
+        status: ConfigVersionStatus.published,
+        published_at: new Date(),
+      },
+      include: { options: true },
+    });
   }
 
   await prisma.greedyRuntimeState.upsert({
@@ -145,12 +161,58 @@ const main = async (): Promise<void> => {
     },
   });
 
+  const admin_email = normalizeAdminEmail(
+    process.env.ADMIN_SEED_EMAIL || 'admin@example.com',
+  );
+  const admin_password = process.env.ADMIN_SEED_PASSWORD || 'AdminPassword123';
+  if (admin_password.length < 12 || admin_password.length > 128) {
+    throw new Error('ADMIN_SEED_PASSWORD must be between 12 and 128 characters');
+  }
+
+  const password_hash = await hashAdminPassword(admin_password);
+  const admin = await prisma.adminUser.upsert({
+    where: { email: admin_email },
+    create: {
+      email: admin_email,
+      display_name: 'Platform Admin',
+      role: AdminRole.super_admin,
+      status: AdminStatus.active,
+      password_hash,
+      force_password_change: false,
+      failed_login_count: 0,
+      locked_until: null,
+      password_changed_at: new Date(),
+    },
+    update: {
+      display_name: 'Platform Admin',
+      role: AdminRole.super_admin,
+      status: AdminStatus.active,
+      password_hash,
+      force_password_change: false,
+      failed_login_count: 0,
+      locked_until: null,
+      password_changed_at: new Date(),
+    },
+    select: { id: true, email: true, role: true },
+  });
+
+  await prisma.adminSession.updateMany({
+    where: { admin_user_id: admin.id, revoked_at: null },
+    data: { revoked_at: new Date() },
+  });
+  await prisma.adminPolicy.upsert({
+    where: { code: 'default' },
+    create: {},
+    update: {},
+  });
+
   console.log({
     seeded: true,
     currency: currency.code,
     game: game.code,
     config_version: greedy_config.version,
     runtime_status: 'stopped',
+    admin: admin.email,
   });
 };
 

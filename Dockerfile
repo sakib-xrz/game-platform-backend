@@ -10,8 +10,9 @@ ENV NODE_ENV=development
 # Copy dependency files first for better Docker cache
 COPY package.json package-lock.json ./
 
-# Install exact dependencies from lockfile
-RUN npm ci --no-audit --no-fund
+# Install exact dependencies from lockfile.
+# --include=dev keeps tsup/prisma even if Coolify injects NODE_ENV=production.
+RUN npm ci --include=dev --no-audit --no-fund
 
 # Copy build/config files
 COPY tsconfig.json vitest.config.ts prisma.config.ts ./
@@ -22,8 +23,9 @@ COPY prisma ./prisma
 # Copy source
 COPY src ./src
 
-# Generate Prisma Client
-RUN npm run prisma:generate
+# Generate Prisma Client.
+# Prisma 7 loads prisma.config.ts, which requires DATABASE_URL even though generate does not connect.
+RUN DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build" npm run prisma:generate
 
 # Build API + Worker
 RUN npm run build
@@ -61,12 +63,13 @@ USER node
 
 EXPOSE 8000
 
-# Container health check
+# Both the API and the worker expose GET /api/v1/health/live on PORT.
+# Coolify's rolling update requires the container to report a health status.
 HEALTHCHECK \
     --interval=30s \
     --timeout=5s \
-    --start-period=15s \
-    --retries=3 \
+    --start-period=20s \
+    --retries=5 \
     CMD node -e "fetch('http://127.0.0.1:8000/api/v1/health/live').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
 
 ENTRYPOINT ["dumb-init", "--"]

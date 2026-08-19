@@ -128,7 +128,7 @@ Content-Type: application/json
 ```json
 {
   "email": "admin@example.com",
-  "password": "a-long-password"
+  "password": "AdminPassword123"
 }
 ```
 
@@ -144,16 +144,9 @@ Sessions expire after 30 minutes of inactivity or 12 hours absolutely, with a
 maximum of three active sessions per admin. Mutating admin requests require a
 unique `Idempotency-Key` header.
 
-Bootstrap or recover the first administrator from a secure TTY:
-
-```bash
-npm run admin:bootstrap -- --email admin@example.com --display-name "Platform Admin"
-npm run admin:recover -- --email admin@example.com
-```
-
-The command prompts for the password without echoing it. `ADMIN_BOOTSTRAP_PASSWORD`
-and `--password` are intended only for controlled non-interactive automation.
-The first login is forced to change the temporary password.
+The first super admin is created by `npm run prisma:seed` using
+`ADMIN_SEED_EMAIL` and `ADMIN_SEED_PASSWORD` (defaults: `admin@example.com` /
+`AdminPassword123`). Re-running seed resets that account's password.
 
 The fixed roles are:
 

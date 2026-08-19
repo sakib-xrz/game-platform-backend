@@ -1,3 +1,4 @@
+import http from 'http';
 import config from '@/config';
 import prisma from '@/lib/prisma';
 import {
@@ -18,6 +19,24 @@ let last_lease_refresh = 0;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+// Minimal liveness endpoint so container orchestration (e.g. Coolify/Docker
+// HEALTHCHECK) has a health signal. The worker has no public routes.
+const startHealthServer = (): http.Server => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/api/v1/health/live') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ status: 'alive', role: 'worker' }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  server.listen(config.port, () => {
+    logger.info('worker_health_server_started', { port: config.port });
+  });
+  return server;
+};
 
 const main = async (): Promise<void> => {
   await prisma.$connect();
@@ -71,6 +90,8 @@ const requestShutdown = (signal: string): void => {
 process.on('SIGINT', () => requestShutdown('SIGINT'));
 process.on('SIGTERM', () => requestShutdown('SIGTERM'));
 
+const health_server = startHealthServer();
+
 main()
   .then(cleanup)
   .catch(async (error) => {
@@ -78,4 +99,7 @@ main()
     stopping = true;
     await cleanup();
     process.exit(1);
+  })
+  .finally(() => {
+    health_server.close();
   });
