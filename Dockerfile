@@ -41,9 +41,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8000
 
-# dumb-init handles shutdown signals properly in Docker
+# dumb-init handles shutdown signals. curl is required by Coolify healthchecks.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends dumb-init \
+    && apt-get install -y --no-install-recommends dumb-init curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install production dependencies only
@@ -63,14 +63,13 @@ USER node
 
 EXPOSE 8000
 
-# API liveness. The worker process has no HTTP server; disable this
-# healthcheck in Coolify for the worker service, or it will stay unhealthy.
+# Same probe for API (PORT 8000) and worker (PORT 8000 in production, 8001 locally).
 HEALTHCHECK \
     --interval=30s \
     --timeout=5s \
     --start-period=20s \
     --retries=5 \
-    CMD node -e "fetch('http://127.0.0.1:8000/api/v1/health/live').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+    CMD curl -fsS http://127.0.0.1:8000/api/v1/health/live || curl -fsS http://127.0.0.1:8001/api/v1/health/live || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
 
