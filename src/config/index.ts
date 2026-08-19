@@ -2,7 +2,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const parsePositiveInt = (value: string | undefined, fallback: number): number => {
+const parsePositiveInt = (
+  value: string | undefined,
+  fallback: number,
+): number => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
@@ -19,15 +22,32 @@ const config = {
     (process.env.ALLOW_DEV_IDENTITY_HEADER || 'false').toLowerCase() === 'true',
   worker_instance_id:
     process.env.WORKER_INSTANCE_ID || `greedy-worker-${process.pid}`,
+  worker_health_port: parsePositiveInt(
+    process.env.WORKER_HEALTH_PORT,
+    process.env.NODE_ENV === 'production'
+      ? Number(process.env.PORT) || 8000
+      : 8001,
+  ),
   greedy_worker_poll_ms: parsePositiveInt(
     process.env.GREEDY_WORKER_POLL_MS,
     200,
   ),
   outbox_poll_ms: parsePositiveInt(process.env.OUTBOX_POLL_MS, 150),
-  ops_alert_webhook_url: process.env.OPS_ALERT_WEBHOOK_URL || process.env.ADMIN_WEBHOOK_URL || '',
-  ops_alert_webhook_secret: process.env.OPS_ALERT_WEBHOOK_SECRET || process.env.ADMIN_WEBHOOK_SECRET || '',
-  ops_alert_webhook_timeout_ms: parsePositiveInt(process.env.OPS_ALERT_WEBHOOK_TIMEOUT_MS || process.env.ADMIN_WEBHOOK_TIMEOUT_MS, 5000),
-  ops_alert_webhook_max_attempts: parsePositiveInt(process.env.OPS_ALERT_WEBHOOK_MAX_ATTEMPTS, 4),
+  ops_alert_webhook_url:
+    process.env.OPS_ALERT_WEBHOOK_URL || process.env.ADMIN_WEBHOOK_URL || '',
+  ops_alert_webhook_secret:
+    process.env.OPS_ALERT_WEBHOOK_SECRET ||
+    process.env.ADMIN_WEBHOOK_SECRET ||
+    '',
+  ops_alert_webhook_timeout_ms: parsePositiveInt(
+    process.env.OPS_ALERT_WEBHOOK_TIMEOUT_MS ||
+      process.env.ADMIN_WEBHOOK_TIMEOUT_MS,
+    5000,
+  ),
+  ops_alert_webhook_max_attempts: parsePositiveInt(
+    process.env.OPS_ALERT_WEBHOOK_MAX_ATTEMPTS,
+    4,
+  ),
   cloudflareR2: {
     account_id: process.env.CLOUDFLARE_R2_ACCOUNT_ID || '',
     access_key_id: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || '',

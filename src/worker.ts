@@ -1,3 +1,4 @@
+import http from 'http';
 import config from '@/config';
 import prisma from '@/lib/prisma';
 import {
@@ -15,14 +16,37 @@ const LEASE_KEY = 'game-worker:greedy';
 let stopping = false;
 let leader = false;
 let last_lease_refresh = 0;
+let health_server: http.Server | undefined;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+const startHealthServer = (port: number): Promise<http.Server> =>
+  new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      if (req.url?.split('?')[0] === '/api/v1/health/live') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, role: 'worker' }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    server.once('error', reject);
+    server.listen(port, () => {
+      logger.info('worker_health_server_started', { port });
+      resolve(server);
+    });
+  });
 
 const main = async (): Promise<void> => {
   await prisma.$connect();
   await connectRedis();
   await recoverGreedyRuntime();
+  health_server = await startHealthServer(config.worker_health_port);
+  logger.info('greedy_worker_started', {
+    instance_id: config.worker_instance_id,
+  });
 
   while (!stopping) {
     try {
@@ -60,6 +84,13 @@ const cleanup = async (): Promise<void> => {
 
   await disconnectRedis();
   await prisma.$disconnect();
+  await new Promise<void>((resolve) => {
+    if (!health_server) {
+      resolve();
+      return;
+    }
+    health_server.close(() => resolve());
+  });
 };
 
 const requestShutdown = (signal: string): void => {
