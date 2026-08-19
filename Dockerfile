@@ -63,8 +63,8 @@ USER node
 
 EXPOSE 8000
 
-# Both the API and the worker expose GET /api/v1/health/live on PORT.
-# Coolify's rolling update requires the container to report a health status.
+# API liveness. The worker process has no HTTP server; disable this
+# healthcheck in Coolify for the worker service, or it will stay unhealthy.
 HEALTHCHECK \
     --interval=30s \
     --timeout=5s \
