@@ -22,14 +22,25 @@ export const ensureWallet = async (
   tx: Prisma.TransactionClient = prisma,
 ) => {
   const currency = await getCurrency(tx);
-  return tx.wallet.upsert({
-    where: {
-      user_id_currency_id: { user_id, currency_id: currency.id },
-    },
-    create: { user_id, currency_id: currency.id },
-    update: {},
-    include: { currency: true },
+  const where = {
+    user_id_currency_id: { user_id, currency_id: currency.id },
+  };
+  const include = { currency: true } as const;
+
+  const existing = await tx.wallet.findUnique({ where, include });
+  if (existing) return existing;
+
+  // Concurrent first-time creates race Prisma upsert; skipDuplicates is ON CONFLICT DO NOTHING.
+  await tx.wallet.createMany({
+    data: [{ user_id, currency_id: currency.id }],
+    skipDuplicates: true,
   });
+
+  const wallet = await tx.wallet.findUnique({ where, include });
+  if (!wallet) {
+    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Wallet could not be initialized');
+  }
+  return wallet;
 };
 
 const getMyWallet = async (user_id: string) => ensureWallet(user_id);
