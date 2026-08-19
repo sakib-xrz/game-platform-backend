@@ -63,9 +63,14 @@ USER node
 
 EXPOSE 8000
 
-# Do not add a Dockerfile HEALTHCHECK.
-# The API is probed by Coolify's UI healthcheck. The worker has no HTTP port;
-# a Dockerfile HEALTHCHECK would mark it unhealthy and Coolify would roll it back.
+# Both the API and the worker expose GET /api/v1/health/live on PORT.
+# Coolify's rolling update requires the container to report a health status.
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=5s \
+    --start-period=20s \
+    --retries=5 \
+    CMD node -e "fetch('http://127.0.0.1:8000/api/v1/health/live').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
 
 ENTRYPOINT ["dumb-init", "--"]
 
