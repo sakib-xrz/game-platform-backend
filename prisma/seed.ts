@@ -39,7 +39,7 @@ const main = async (): Promise<void> => {
       data: {
         game_id: game.id,
         version: 1,
-        status: ConfigVersionStatus.published,
+        status: ConfigVersionStatus.draft,
         betting_duration_ms: 15000,
         lock_duration_ms: 1000,
         drawing_duration_ms: 4000,
@@ -49,7 +49,6 @@ const main = async (): Promise<void> => {
         max_round_bet: 50000n,
         notes:
           'Technical baseline. Replace names/images/economy before public launch.',
-        published_at: new Date(),
         chip_values: {
           create: [
             { amount: 10n, display_order: 1 },
@@ -128,6 +127,20 @@ const main = async (): Promise<void> => {
             },
           ],
         },
+      },
+      include: { options: true },
+    });
+
+    greedy_config = await prisma.greedyConfigVersion.update({
+      where: { id: greedy_config.id },
+      data: { status: ConfigVersionStatus.review_pending },
+      include: { options: true },
+    });
+    greedy_config = await prisma.greedyConfigVersion.update({
+      where: { id: greedy_config.id },
+      data: {
+        status: ConfigVersionStatus.published,
+        published_at: new Date(),
       },
       include: { options: true },
     });
