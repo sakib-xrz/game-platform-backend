@@ -237,8 +237,6 @@ const cancelCurrentRound = async (payload: CancelRoundBody, actor_id?: string) =
       GreedyRoundStatus.created,
       GreedyRoundStatus.betting_open,
       GreedyRoundStatus.betting_locked,
-      GreedyRoundStatus.result_ready,
-      GreedyRoundStatus.drawing,
     ];
     if (!round || !cancellable_statuses.includes(round.status)) {
       throw new AppError(
@@ -246,14 +244,21 @@ const cancelCurrentRound = async (payload: CancelRoundBody, actor_id?: string) =
         'Round can only be cancelled before the result is revealed',
       );
     }
-    const cancelled = await tx.greedyRound.update({
-      where: { id: round.id },
+    // The worker can advance the round between the read above and this write.
+    // Keep cancellation atomic so a result that is being prepared or revealed
+    // can never be replaced with a cancelled/refunded round.
+    const cancellation = await tx.greedyRound.updateMany({
+      where: { id: round.id, status: { in: cancellable_statuses } },
       data: {
         status: GreedyRoundStatus.cancelled,
         cancelled_at: new Date(),
         cancellation_reason: payload.reason,
       },
     });
+    if (cancellation.count !== 1) {
+      throw new AppError(httpStatus.CONFLICT, 'Round can only be cancelled before the result is prepared');
+    }
+    const cancelled = await tx.greedyRound.findUniqueOrThrow({ where: { id: round.id } });
     await tx.auditLog.create({
       data: {
         actor_type: AuditActorType.admin, actor_id,
