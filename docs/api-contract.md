@@ -56,7 +56,12 @@ Immutable wallet ledger history.
 
 ## Admin/operations
 
-Admin integration currently uses `X-Admin-Key` as a temporary seam.
+Admin integration uses password-authenticated opaque bearer sessions. The
+trusted same-origin Next/BFF layer logs in through `POST /admin/auth/login`,
+stores the returned `session_token` server-side, and forwards subsequent admin
+requests with `Authorization: Bearer <session_token>`. Admin mutations require
+an `Idempotency-Key`. The legacy `X-Admin-Key` header is deprecated and should
+not be used by the production panel.
 
 ### GET `/admin/games/greedy/runtime`
 
@@ -70,9 +75,19 @@ Lists immutable config versions and options.
 
 Creates a draft config. Exactly 8 options are currently required, together with 1–12 versioned chip presets. Amounts, chip values, payout numerator/denominator, and probability weights are integer strings.
 
-### POST `/admin/games/greedy/config-versions/:config_id/publish`
+### POST `/admin/games/greedy/config-versions/validate`
 
-Retires the previous published config and publishes the selected draft. A running round keeps its frozen old version; only future rounds use the new version.
+Uses the same body and returns the authoritative `valid`, `failures`, `total_weight`, per-option normalized probability/contribution percentages, and weighted `theoretical_return_percent` preview.
+
+### POST `/admin/games/greedy/config-versions/:config_id/publish-request`
+
+Submits the selected draft for second-admin approval. A running round keeps its frozen old version; only future rounds use a published version.
+
+The legacy `POST /admin/games/greedy/config-versions/:config_id/publish` path is also approval-aware and only submits a request; it never publishes directly.
+
+### POST `/admin/games/greedy/config-versions/publish-approved`
+
+Applies an approved configuration publish request. The original requester applies the approved request, and the payload hash is checked before publishing.
 
 ### POST `/admin/games/greedy/resume`
 
@@ -94,6 +109,8 @@ Body:
 
 Allowed only before public reveal. The worker performs exactly-once aggregate refunds.
 
+Cancellation exposure at or above the policy threshold returns `202 pending_approval`. The requester applies the approved request through the same endpoint with `approval_id`; current round, cancellable status, reason, exposure, and payload hash are rechecked before mutation.
+
 ### POST `/admin/wallets/adjust`
 
 Body:
@@ -101,12 +118,33 @@ Body:
 ```json
 {
   "user_id": "user-001",
+  "direction": "credit",
   "amount": "10000",
-  "reason": "development credit"
+  "reason": "development credit",
+  "ticket_reference": "SUP-12345"
 }
 ```
 
-Creates a wallet update, immutable ledger entry, audit row, and outbox event transactionally.
+Creates a wallet update, immutable ledger entry, audit row, and outbox event transactionally when within policy. At or above the policy threshold, it creates a pending approval; a distinct eligible finance/super admin must approve before the requester applies it.
+
+The player lookup is exact `user_id` only and returns 404 when no existing COIN wallet exists. Wallet amounts and ledger values are decimal strings.
+
+### Greedy operations
+
+`/admin/games/greedy` includes `overview`, `health`, `metrics`, `audit-logs`, `alerts`, config detail/update/clone, paged `rounds` with status/round/config/winner filters, `rounds/:round_id`, `rounds/:round_id/bets`, `rounds/:round_id/result-verification`, and `users/:user_id` wallet/ledger/bet summary. Metrics are bucketed in `Asia/Dhaka` and include accepted/refunded/net stake, payout, gross result, unique bettors, cancellation rate, and settlement latency.
+
+`POST /admin/games/greedy/availability` accepts `active`, `maintenance`, or `disabled`. Only a super admin may disable, and disabling requires no current round. Maintenance pauses future rounds while allowing the current round to finish.
+
+Managed assets use presign/complete or direct compatibility upload. The server decodes and normalizes square PNG/JPEG/WebP images (256–2048px, <=2 MB) to WebP and checks checksum before marking them ready.
+
+### Admin approvals
+
+- `GET /admin/approvals`
+- `GET /admin/approvals/:approval_id`
+- `POST /admin/approvals/:approval_id/approve`
+- `POST /admin/approvals/:approval_id/reject`
+
+Approvals expire after 24 hours by default. A requester cannot approve their own request, and approval payloads are immutable and hash-verified.
 
 ## Health
 

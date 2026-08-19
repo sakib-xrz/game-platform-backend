@@ -18,6 +18,7 @@ import {
 import type { BetResponse } from './greedy.types';
 import type { PlaceBetBody } from './greedy.validation';
 import { withSerializableRetry } from './greedy.utils';
+import { randomUUID } from 'node:crypto';
 
 const public_result_statuses: GreedyRoundStatus[] = [
   GreedyRoundStatus.result_revealed,
@@ -359,6 +360,9 @@ const placeBetTransaction = async (
       },
     });
 
+    // Allocate the bet identifier before inserting the ledger so the ledger
+    // can remain append-only; the historical reference is never patched later.
+    const bet_id = randomUUID();
     const ledger = await tx.walletLedger.create({
       data: {
         wallet_id: wallet.id,
@@ -369,12 +373,14 @@ const placeBetTransaction = async (
         balance_before: wallet.balance,
         balance_after: updated_wallet.balance,
         reference_type: 'greedy_bet',
+        reference_id: bet_id,
         idempotency_key: payload.client_request_id,
       },
     });
 
     const bet = await tx.greedyBet.create({
       data: {
+        id: bet_id,
         game_id: game.id,
         round_id: round.id,
         user_id,
@@ -386,11 +392,6 @@ const placeBetTransaction = async (
         client_request_id: payload.client_request_id,
         wallet_debit_ledger_id: ledger.id,
       },
-    });
-
-    await tx.walletLedger.update({
-      where: { id: ledger.id },
-      data: { reference_id: bet.id },
     });
 
     const response: BetResponse = {

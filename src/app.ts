@@ -22,10 +22,9 @@ app.use(cors({
   allowedHeaders: [
     'Content-Type',
     'Authorization',
+    'Idempotency-Key',
     'X-Request-Id',
     'X-User-Id',
-    'X-Admin-Key',
-    'X-Admin-Actor-Id',
   ],
 }));
 app.use(express.json({ limit: '1mb' }));

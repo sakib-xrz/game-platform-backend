@@ -5,6 +5,8 @@ import prisma from '@/lib/prisma';
 import { connectRedis, disconnectRedis } from '@/infrastructure/redis/redis.client';
 import { initializeSocket } from '@/infrastructure/socket/socket';
 import { startOutboxWorker, stopOutboxWorker } from '@/workers/outbox.worker';
+import { startAuditRetentionWorker, stopAuditRetentionWorker } from '@/workers/audit-retention.worker';
+import { startOpsAlertWorker, stopOpsAlertWorker } from '@/workers/ops-alert.worker';
 import { logger } from '@/utils/logger';
 
 let shutting_down = false;
@@ -16,6 +18,8 @@ const start = async (): Promise<void> => {
   const http_server = http.createServer(app);
   const io = initializeSocket(http_server);
   startOutboxWorker();
+  startAuditRetentionWorker();
+  startOpsAlertWorker();
 
   http_server.listen(config.port, () => {
     logger.info('api_server_started', { port: config.port, env: config.node_env });
@@ -26,6 +30,8 @@ const start = async (): Promise<void> => {
     shutting_down = true;
     logger.info('api_server_shutting_down', { signal });
     stopOutboxWorker();
+    stopAuditRetentionWorker();
+    stopOpsAlertWorker();
     io.disconnectSockets(true);
     http_server.close(async () => {
       await disconnectRedis();

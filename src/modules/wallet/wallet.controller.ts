@@ -5,6 +5,7 @@ import catchAsync from '@/utils/catch-async';
 import sendResponse from '@/utils/send-response';
 import WalletService from './wallet.services';
 import type { AdminAdjustWalletBody } from './wallet.validation';
+import { requestAuditContext } from '@/modules/admin/admin.request';
 
 const getMyWallet = catchAsync(async (req: Request, res: Response) => {
   if (!req.game_user_id) throw new AppError(httpStatus.UNAUTHORIZED, 'Player identity missing');
@@ -27,8 +28,8 @@ const getTransactions = catchAsync(async (req: Request, res: Response) => {
 });
 
 const adminAdjustWallet = catchAsync(async (req: Request, res: Response) => {
-  const data = await WalletService.adminAdjustWallet(req.body as AdminAdjustWalletBody);
-  sendResponse(res, { statusCode: 200, success: true, message: 'Wallet adjusted', data });
+  const data = await WalletService.adminAdjustWallet(req.body as AdminAdjustWalletBody, requestAuditContext(req));
+  sendResponse(res, { statusCode: data.status === 'pending_approval' ? 202 : 200, success: true, message: data.status === 'pending_approval' ? 'Wallet adjustment is pending approval' : 'Wallet adjusted', data });
 });
 
 export default { getMyWallet, getTransactions, adminAdjustWallet };

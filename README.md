@@ -113,14 +113,90 @@ Those are the two identity integration seams. Do not allow the development ident
 
 ## Admin integration
 
-Until platform RBAC is connected, operational admin endpoints use:
+Admin operations use password authentication with opaque bearer sessions. The
+legacy `X-Admin-Key`/`X-Admin-Actor-Id` mechanism is deprecated and must not be
+used by the production panel. `ADMIN_API_KEY` remains only for local migration
+compatibility and should be removed once all clients have moved.
+
+The trusted Next/BFF layer should call:
 
 ```http
-X-Admin-Key: <ADMIN_API_KEY>
-X-Admin-Actor-Id: optional-admin-id
+POST /api/v1/admin/auth/login
+Content-Type: application/json
 ```
 
-Set a strong `ADMIN_API_KEY` in `.env`. Replace this guard with platform RBAC later at `src/middlewares/admin-key.ts`.
+```json
+{
+  "email": "admin@example.com",
+  "password": "a-long-password"
+}
+```
+
+The response contains only `session_token`, `expires_at`, and a sanitized
+`admin` object (with an optional `csrf_token` if the BFF contract enables it).
+Store the opaque token only in the trusted BFF and send it to the backend as:
+
+```http
+Authorization: Bearer <session_token>
+```
+
+Sessions expire after 30 minutes of inactivity or 12 hours absolutely, with a
+maximum of three active sessions per admin. Mutating admin requests require a
+unique `Idempotency-Key` header.
+
+Bootstrap or recover the first administrator from a secure TTY:
+
+```bash
+npm run admin:bootstrap -- --email admin@example.com --display-name "Platform Admin"
+npm run admin:recover -- --email admin@example.com
+```
+
+The command prompts for the password without echoing it. `ADMIN_BOOTSTRAP_PASSWORD`
+and `--password` are intended only for controlled non-interactive automation.
+The first login is forced to change the temporary password.
+
+The fixed roles are:
+
+| Role | Boundary |
+|---|---|
+| `super_admin` | Full administration, policy, approvals, and account management |
+| `game_operator` | Greedy configuration, runtime, rounds, and game approvals |
+| `finance_operator` | Wallet reads/adjustments and finance approvals |
+| `support` | Read-only player, wallet, round, and bet access |
+| `auditor` | Read-only operational data, approvals, result verification, and audit logs |
+
+Wallet adjustments at or above the configured policy threshold require one
+distinct eligible approver. The requester cannot approve or apply their own
+request. Approval payloads are hash-checked before application and expire after
+24 hours by default.
+
+Important admin endpoints include:
+
+```text
+POST /admin/auth/login
+GET  /admin/auth/me
+POST /admin/auth/logout
+POST /admin/auth/password/change
+GET  /admin/auth/sessions
+GET  /admin/admin-users
+GET  /admin/approvals
+POST /admin/approvals/:approval_id/approve
+POST /admin/approvals/:approval_id/reject
+GET  /admin/games/greedy/overview
+GET  /admin/games/greedy/rounds
+GET  /admin/games/greedy/users/:user_id
+GET  /admin/games/greedy/audit-logs
+GET  /admin/games/greedy/assets
+```
+
+Greedy result evidence is append-only. The winner, algorithm, entropy digest,
+audit hash, and generated timestamp cannot be changed or deleted. The worker
+may record the first reveal timestamp. Audit rows are also append-only; the
+retention job may purge only rows older than 365 days using the transaction
+setting `app.audit_retention_purge = 'on'`.
+
+For local development, player identity may still use `X-User-Id` only when
+`ALLOW_DEV_IDENTITY_HEADER=true`. Never enable that setting in production.
 
 API details are also documented in `docs/api-contract.md`; realtime event semantics are in `docs/socket-events.md`.
 
@@ -230,7 +306,7 @@ No input is required to run the backend locally. When the related work reaches t
 
 1. **Real auth integration** — platform user-token/session contract; wire it into `player-context.ts` and Socket handshake.
 2. **Greedy visual/theme data** — final 8 option names/images/icons. Images are referenced by `image_url`; they are not stored in the database.
-3. **Production secrets** — `DATABASE_URL`, `REDIS_URL`, `ADMIN_API_KEY`, allowed frontend origins.
+3. **Production secrets** — `DATABASE_URL`, `REDIS_URL`, admin bootstrap/recovery credentials, allowed frontend origins, and (when enabled) the Cloudflare R2 and admin webhook secrets.
 4. **Production game economy** — final bet limits/chip presets/multipliers/probability weights, supplied through a new config version rather than code changes.
 
 ## Production invariants implemented

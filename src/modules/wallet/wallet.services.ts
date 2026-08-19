@@ -1,9 +1,11 @@
 import httpStatus from 'http-status';
-import { AuditActorType, Prisma, WalletLedgerType } from '@/generated/prisma/client';
+import { AdminApprovalStatus, AuditActorType, Prisma, WalletLedgerType } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
 import { getPagination } from '@/utils/pagination';
 import type { AdminAdjustWalletBody } from './wallet.validation';
+import type { AdminAuditContext } from '@/modules/admin/admin.services';
+import { createPendingApproval, markApprovalApplied, verifyApprovalPayloadHash } from '@/modules/admin/admin-approval.services';
 
 const DEFAULT_CURRENCY_CODE = 'COIN';
 
@@ -60,12 +62,31 @@ const getTransactions = async (user_id: string, page = 1, limit = 20) => {
   return { items, total, ...pagination };
 };
 
-const adminAdjustWallet = async (payload: AdminAdjustWalletBody) => {
-  const amount = BigInt(payload.amount);
+const adminAdjustWallet = async (payload: AdminAdjustWalletBody, context: AdminAuditContext = {}) => {
+  const unsigned_amount = BigInt(payload.amount.startsWith('-') ? payload.amount.slice(1) : payload.amount);
+  const amount = payload.direction === 'debit' || (!payload.direction && payload.amount.startsWith('-')) ? -unsigned_amount : unsigned_amount;
   if (amount === 0n) throw new AppError(httpStatus.BAD_REQUEST, 'amount cannot be zero');
 
   return prisma.$transaction(async (tx) => {
-    const wallet = await ensureWallet(payload.user_id, tx);
+    const currency = await getCurrency(tx);
+    const wallet = await tx.wallet.findUnique({ where: { user_id_currency_id: { user_id: payload.user_id, currency_id: currency.id } }, include: { currency: true } });
+    if (!wallet) throw new AppError(httpStatus.NOT_FOUND, 'Player wallet not found for user ID');
+    const policy = await tx.adminPolicy.findUnique({ where: { code: 'default' } });
+    const threshold = policy?.wallet_adjustment_threshold ?? 10000n;
+    if (!payload.approval_id && (amount < 0n ? -amount : amount) >= threshold) {
+      if (!context.admin_user_id || !context.idempotency_key) throw new AppError(httpStatus.UNAUTHORIZED, 'Authenticated admin and Idempotency-Key are required');
+      const approval = await createPendingApproval({ admin_user_id: context.admin_user_id, action_type: 'wallet.adjust', target_type: 'wallet', target_id: wallet.id, payload: { user_id: payload.user_id, direction: amount > 0n ? 'credit' : 'debit', amount: unsigned_amount.toString(), reason: payload.reason, ticket_reference: payload.ticket_reference ?? null }, idempotency_key: context.idempotency_key }, tx);
+      await tx.auditLog.create({ data: { actor_type: AuditActorType.admin, actor_id: context.admin_user_id, admin_user_id: context.admin_user_id, actor_role: context.actor_role, outcome: 'success', action: 'wallet.adjustment.submitted_for_approval', entity_type: 'wallet', entity_id: wallet.id, approval_request_id: approval.id, request_id: context.request_id, ip_address: context.ip_address, user_agent: context.user_agent, new_values: { user_id: payload.user_id, amount: payload.amount, reason: payload.reason } } });
+      return { status: 'pending_approval' as const, approval_id: approval.id, expires_at: approval.expires_at };
+    }
+    if (payload.approval_id) {
+      const approval = await tx.adminApprovalRequest.findUnique({ where: { id: payload.approval_id } });
+      if (!approval || approval.action_type !== 'wallet.adjust' || approval.status !== AdminApprovalStatus.approved || approval.expires_at <= new Date()) throw new AppError(httpStatus.CONFLICT, 'Wallet adjustment approval is not ready');
+      if (approval.requested_by_admin_id !== context.admin_user_id) throw new AppError(httpStatus.FORBIDDEN, 'Only the requesting admin can apply this approval');
+      verifyApprovalPayloadHash(approval.payload, approval.payload_hash);
+      const approved = approval.payload as { user_id?: string; direction?: string; amount?: string; reason?: string; ticket_reference?: string | null };
+      if (approved.user_id !== payload.user_id || approved.direction !== (amount > 0n ? 'credit' : 'debit') || approved.amount !== unsigned_amount.toString() || approved.reason !== payload.reason || (approved.ticket_reference ?? null) !== (payload.ticket_reference ?? null)) throw new AppError(httpStatus.CONFLICT, 'Wallet adjustment does not match the approved request');
+    }
     const balance_after = wallet.balance + amount;
     if (balance_after < 0n) {
       throw new AppError(httpStatus.BAD_REQUEST, 'Wallet balance cannot become negative');
@@ -88,13 +109,21 @@ const adminAdjustWallet = async (payload: AdminAdjustWalletBody) => {
         balance_before: wallet.balance,
         balance_after,
         reference_type: 'admin_adjustment',
-        metadata: { reason: payload.reason },
+        metadata: { reason: payload.reason, direction: amount > 0n ? 'credit' : 'debit', ticket_reference: payload.ticket_reference ?? null },
       },
     });
 
     await tx.auditLog.create({
       data: {
         actor_type: AuditActorType.admin,
+        actor_id: context.admin_user_id,
+        admin_user_id: context.admin_user_id,
+        actor_role: context.actor_role,
+        request_id: context.request_id,
+        ip_address: context.ip_address,
+        user_agent: context.user_agent,
+        approval_request_id: payload.approval_id,
+        outcome: 'success',
         action: 'wallet.admin_adjusted',
         entity_type: 'wallet',
         entity_id: wallet.id,
@@ -102,6 +131,8 @@ const adminAdjustWallet = async (payload: AdminAdjustWalletBody) => {
           user_id: payload.user_id,
           amount: amount.toString(),
           reason: payload.reason,
+          direction: amount > 0n ? 'credit' : 'debit',
+          ticket_reference: payload.ticket_reference ?? null,
           ledger_id: ledger.id,
         },
       },
@@ -121,7 +152,8 @@ const adminAdjustWallet = async (payload: AdminAdjustWalletBody) => {
       },
     });
 
-    return { wallet: updated, ledger };
+    if (payload.approval_id) await markApprovalApplied(tx, payload.approval_id, context);
+    return { status: 'applied' as const, wallet: updated, ledger };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 };
 

@@ -13,6 +13,7 @@ const optionSchema = z.object({
   code: z.string().trim().min(2).max(50).regex(/^[A-Z0-9_]+$/),
   name: z.string().trim().min(1).max(100),
   image_url: z.string().trim().url().optional().nullable(),
+  asset_id: z.string().trim().cuid().optional().nullable(),
   display_order: z.number().int().min(1).max(100),
   payout_numerator: positiveIntegerString,
   payout_denominator: positiveIntegerString.default('1'),
@@ -91,7 +92,11 @@ export const configParamSchema = z.object({
 });
 
 export const cancelRoundSchema = z.object({
-  body: z.object({ reason: z.string().trim().min(3).max(250) }),
+  body: z.object({ reason: z.string().trim().min(3).max(250), approval_id: z.string().trim().cuid().optional() }),
+});
+
+export const approvalParamSchema = z.object({
+  body: z.object({ approval_id: z.string().trim().cuid() }),
 });
 
 export type CreateGreedyConfigBody = z.infer<typeof createGreedyConfigSchema>['body'];

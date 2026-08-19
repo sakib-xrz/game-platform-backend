@@ -10,6 +10,7 @@ const parsePositiveInt = (value: string | undefined, fallback: number): number =
 const config = {
   port: Number(process.env.PORT) || 8000,
   node_env: process.env.NODE_ENV || 'development',
+  nodeEnv: process.env.NODE_ENV || 'development',
   database_url: process.env.DATABASE_URL || '',
   redis_url: process.env.REDIS_URL || 'redis://localhost:6379',
   cors_origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
@@ -23,6 +24,17 @@ const config = {
     200,
   ),
   outbox_poll_ms: parsePositiveInt(process.env.OUTBOX_POLL_MS, 150),
+  ops_alert_webhook_url: process.env.OPS_ALERT_WEBHOOK_URL || process.env.ADMIN_WEBHOOK_URL || '',
+  ops_alert_webhook_secret: process.env.OPS_ALERT_WEBHOOK_SECRET || process.env.ADMIN_WEBHOOK_SECRET || '',
+  ops_alert_webhook_timeout_ms: parsePositiveInt(process.env.OPS_ALERT_WEBHOOK_TIMEOUT_MS || process.env.ADMIN_WEBHOOK_TIMEOUT_MS, 5000),
+  ops_alert_webhook_max_attempts: parsePositiveInt(process.env.OPS_ALERT_WEBHOOK_MAX_ATTEMPTS, 4),
+  cloudflareR2: {
+    account_id: process.env.CLOUDFLARE_R2_ACCOUNT_ID || '',
+    access_key_id: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || '',
+    secret_access_key: process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || '',
+    bucket_name: process.env.CLOUDFLARE_R2_BUCKET_NAME || '',
+    public_url: process.env.CLOUDFLARE_R2_PUBLIC_URL || '',
+  },
 };
 
 export default config;

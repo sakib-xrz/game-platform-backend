@@ -28,6 +28,7 @@ enum GreedyRuntimeStatus {
 
 enum ConfigVersionStatus {
   draft
+  review_pending
   published
   retired
 
@@ -95,6 +96,67 @@ enum AuditActorType {
   user
 
   @@map("audit_actor_type")
+}
+
+enum AdminRole {
+  super_admin
+  game_operator
+  finance_operator
+  support
+  auditor
+
+  @@map("admin_role")
+}
+
+enum AdminStatus {
+  active
+  locked
+  disabled
+
+  @@map("admin_status")
+}
+
+enum AdminApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+  applied
+  failed
+
+  @@map("admin_approval_status")
+}
+
+enum AdminApprovalDecisionType {
+  approve
+  reject
+
+  @@map("admin_approval_decision")
+}
+
+enum AdminAssetStatus {
+  pending
+  ready
+  rejected
+  deleted
+
+  @@map("admin_asset_status")
+}
+
+enum OpsAlertSeverity {
+  info
+  warning
+  critical
+
+  @@map("ops_alert_severity")
+}
+
+enum OpsAlertStatus {
+  open
+  acknowledged
+  resolved
+
+  @@map("ops_alert_status")
 }
 
 model Currency {
@@ -249,6 +311,7 @@ model GreedyOptionVersion {
   code                  String
   name                  String
   image_url             String?
+  asset_id              String?
   display_order         Int
   payout_numerator      BigInt
   payout_denominator    BigInt   @default(1)
@@ -257,6 +320,7 @@ model GreedyOptionVersion {
   created_at            DateTime @default(now())
 
   config_version GreedyConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  asset          AdminAsset?          @relation(fields: [asset_id], references: [id], onDelete: Restrict)
   bets           GreedyBet[]
   winning_results GreedyRoundResult[] @relation("winning_option")
 
@@ -462,6 +526,10 @@ model AuditLog {
   id           String         @id @default(cuid())
   actor_type   AuditActorType
   actor_id     String?
+  admin_user_id String?
+  actor_role   AdminRole?
+  outcome      String?
+  approval_request_id String?
   action       String
   entity_type  String
   entity_id    String?
@@ -472,7 +540,183 @@ model AuditLog {
   request_id   String?
   created_at   DateTime       @default(now())
 
+  admin_user AdminUser? @relation(fields: [admin_user_id], references: [id], onDelete: Restrict)
+  approval_request AdminApprovalRequest? @relation(fields: [approval_request_id], references: [id], onDelete: SetNull)
+
   @@index([entity_type, entity_id, created_at])
   @@index([actor_id, created_at])
   @@map("audit_logs")
+}
+
+model AdminUser {
+  id                    String      @id @default(cuid())
+  email                 String      @unique
+  display_name          String
+  password_hash         String
+  role                  AdminRole
+  status                AdminStatus @default(active)
+  force_password_change Boolean     @default(true)
+  failed_login_count    Int         @default(0)
+  locked_until          DateTime?
+  last_login_at         DateTime?
+  password_changed_at   DateTime?
+  created_at            DateTime    @default(now())
+  updated_at            DateTime    @updatedAt
+
+  sessions            AdminSession[]
+  approval_requests   AdminApprovalRequest[] @relation("approval_requester")
+  approval_decisions  AdminApprovalDecision[]
+  assets              AdminAsset[]
+  policies            AdminPolicy[]
+  audit_logs          AuditLog[]
+  idempotency_records AdminIdempotencyRecord[]
+  acknowledged_alerts OpsAlert[] @relation("alert_acknowledger")
+  resolved_alerts     OpsAlert[] @relation("alert_resolver")
+
+  @@index([role, status])
+  @@map("admin_users")
+}
+
+model AdminSession {
+  id                  String    @id @default(cuid())
+  admin_user_id       String
+  token_hash          String    @unique
+  idle_expires_at     DateTime
+  absolute_expires_at DateTime
+  revoked_at          DateTime?
+  ip_address          String?
+  user_agent          String?
+  created_at          DateTime  @default(now())
+  last_seen_at        DateTime  @default(now())
+
+  admin_user AdminUser @relation(fields: [admin_user_id], references: [id], onDelete: Cascade)
+
+  @@index([admin_user_id, revoked_at])
+  @@index([idle_expires_at])
+  @@index([absolute_expires_at])
+  @@map("admin_sessions")
+}
+
+model AdminApprovalRequest {
+  id                    String               @id @default(cuid())
+  action_type           String
+  target_type           String
+  target_id             String?
+  payload               Json
+  payload_hash          String
+  requested_by_admin_id String
+  status                AdminApprovalStatus  @default(pending)
+  required_approvals    Int                  @default(1)
+  idempotency_key       String
+  expires_at            DateTime
+  applied_at            DateTime?
+  execution_error       String?
+  created_at            DateTime             @default(now())
+  updated_at            DateTime             @updatedAt
+
+  requested_by AdminUser              @relation("approval_requester", fields: [requested_by_admin_id], references: [id], onDelete: Restrict)
+  decisions    AdminApprovalDecision[]
+  audit_logs   AuditLog[]
+
+  @@unique([requested_by_admin_id, action_type, idempotency_key])
+  @@index([status, expires_at])
+  @@index([target_type, target_id])
+  @@map("admin_approval_requests")
+}
+
+model AdminApprovalDecision {
+  id          String                 @id @default(cuid())
+  request_id  String
+  admin_user_id String
+  decision    AdminApprovalDecisionType
+  reason      String?
+  created_at  DateTime               @default(now())
+
+  request   AdminApprovalRequest @relation(fields: [request_id], references: [id], onDelete: Restrict)
+  admin_user AdminUser            @relation(fields: [admin_user_id], references: [id], onDelete: Restrict)
+
+  @@unique([request_id, admin_user_id])
+  @@index([admin_user_id, created_at])
+  @@map("admin_approval_decisions")
+}
+
+model AdminPolicy {
+  id                             String   @id @default(cuid())
+  code                           String   @unique @default("default")
+  wallet_adjustment_threshold    BigInt   @default(10000)
+  approval_expiry_minutes        Int      @default(1440)
+  updated_by_admin_id            String?
+  created_at                     DateTime @default(now())
+  updated_at                     DateTime @updatedAt
+
+  updated_by AdminUser? @relation(fields: [updated_by_admin_id], references: [id], onDelete: SetNull)
+
+  @@map("admin_policies")
+}
+
+model AdminAsset {
+  id                  String           @id @default(cuid())
+  object_key          String           @unique
+  bucket              String
+  content_type        String
+  byte_size           Int
+  checksum_sha256     String
+  status              AdminAssetStatus @default(pending)
+  cdn_url             String?
+  uploaded_by_admin_id String
+  completed_at        DateTime?
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @updatedAt
+
+  uploaded_by AdminUser             @relation(fields: [uploaded_by_admin_id], references: [id], onDelete: Restrict)
+  options    GreedyOptionVersion[]
+
+  @@index([status, created_at])
+  @@map("admin_assets")
+}
+
+model AdminIdempotencyRecord {
+  id              String            @id @default(cuid())
+  admin_user_id   String
+  scope           String
+  idempotency_key String
+  request_hash    String
+  status          IdempotencyStatus @default(processing)
+  http_status     Int?
+  response_body   Json?
+  expires_at      DateTime
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  admin_user AdminUser @relation(fields: [admin_user_id], references: [id], onDelete: Cascade)
+
+  @@unique([admin_user_id, scope, idempotency_key])
+  @@index([expires_at])
+  @@map("admin_idempotency_records")
+}
+
+model OpsAlert {
+  id                    String          @id @default(cuid())
+  code                  String
+  severity              OpsAlertSeverity
+  status                OpsAlertStatus  @default(open)
+  message               String
+  source                String
+  dedupe_key            String?         @unique
+  metadata              Json?
+  first_seen_at         DateTime        @default(now())
+  last_seen_at          DateTime        @default(now())
+  acknowledged_at       DateTime?
+  acknowledged_by_id    String?
+  resolved_at           DateTime?
+  resolved_by_id        String?
+  created_at            DateTime        @default(now())
+  updated_at            DateTime        @updatedAt
+
+  acknowledged_by AdminUser? @relation("alert_acknowledger", fields: [acknowledged_by_id], references: [id], onDelete: SetNull)
+  resolved_by     AdminUser? @relation("alert_resolver", fields: [resolved_by_id], references: [id], onDelete: SetNull)
+
+  @@index([status, severity, last_seen_at])
+  @@index([code, source, last_seen_at])
+  @@map("ops_alerts")
 }

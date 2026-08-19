@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import { logger } from '@/utils/logger';
 
@@ -8,6 +8,22 @@ export const apiRateLimiter = rateLimit({
   limit: 600,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
+});
+
+export const adminLoginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 320) : 'unknown';
+    return `${ipKeyGenerator(req.ip || 'unknown')}:${email}`;
+  },
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many admin login attempts',
+  },
 });
 
 const BET_WINDOW_MS = 1000;

@@ -2,6 +2,7 @@ import express from 'express';
 import { GreedyRoutes } from '@/modules/greedy/greedy.routes';
 import { WalletRoutes, WalletAdminRoutes } from '@/modules/wallet/wallet.routes';
 import { GameAdminRoutes } from '@/modules/game-admin/game-admin.routes';
+import AdminRoutes from '@/modules/admin/admin.routes';
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import sendResponse from '@/utils/send-response';
@@ -31,5 +32,6 @@ router.use('/games/greedy', GreedyRoutes);
 router.use('/wallets', WalletRoutes);
 router.use('/admin/wallets', WalletAdminRoutes);
 router.use('/admin/games', GameAdminRoutes);
+router.use('/admin', AdminRoutes);
 
 export default router;

@@ -10,8 +10,11 @@ export const walletHistorySchema = z.object({
 export const adminAdjustWalletSchema = z.object({
   body: z.object({
     user_id: z.string().trim().min(1).max(128),
-    amount: z.string().regex(/^-?[1-9]\d*$/, 'amount must be a non-zero integer string'),
+    amount: z.string().regex(/^[1-9]\d*$/, 'amount must be a positive integer string'),
     reason: z.string().trim().min(3).max(250),
+    approval_id: z.string().trim().cuid().optional(),
+    direction: z.enum(['credit', 'debit']),
+    ticket_reference: z.string().trim().min(3).max(128),
   }),
 });
 
