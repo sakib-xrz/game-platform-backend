@@ -38,13 +38,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/health/live",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "health",
-                "live"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["health", "live"]
             },
             "description": "Liveness probe. Confirms the API process is alive."
           },
@@ -79,13 +74,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/health/ready",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "health",
-                "ready"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["health", "ready"]
             },
             "description": "Readiness probe. Validates PostgreSQL and Redis availability."
           },
@@ -146,15 +136,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/runtime",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "games",
-                "greedy",
-                "runtime"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "games", "greedy", "runtime"]
             },
             "description": "Reads persisted Greedy runtime state and captures active config/current round IDs when available."
           },
@@ -197,15 +180,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/resume",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "games",
-                "greedy",
-                "resume"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "games", "greedy", "resume"]
             },
             "description": "Starts/resumes Greedy. The game worker creates a round if none exists."
           },
@@ -248,15 +224,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/pause",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "games",
-                "greedy",
-                "pause"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "games", "greedy", "pause"]
             },
             "description": "Stops future round creation. The active round is allowed to finish safely."
           },
@@ -316,15 +285,8 @@
             },
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/cancel-current-round",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "games",
-                "greedy",
-                "cancel-current-round"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "games", "greedy", "cancel-current-round"]
             },
             "description": "Operational recovery endpoint. Allowed only before result reveal. Worker refunds accepted bets exactly once."
           },
@@ -400,14 +362,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/games/greedy/snapshot",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "snapshot"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "snapshot"]
             },
             "description": "Primary player recovery/bootstrap endpoint. Automatically captures current_round_id, option_id, config ID, wallet ID, balance, and a valid chip value."
           },
@@ -477,14 +433,8 @@
             },
             "url": {
               "raw": "{{base_url}}/admin/wallets/adjust",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "wallets",
-                "adjust"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "wallets", "adjust"]
             },
             "description": "Development/admin wallet credit. Automatically captures wallet_id, ledger_id, and updated balance."
           },
@@ -526,13 +476,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/wallets/me",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "wallets",
-                "me"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["wallets", "me"]
             },
             "description": "Returns the current user's shared COIN wallet."
           },
@@ -574,14 +519,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/wallets/me/transactions?page={{page}}&limit={{limit}}",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "wallets",
-                "me",
-                "transactions"
-              ],
+              "host": ["{{base_url}}"],
+              "path": ["wallets", "me", "transactions"],
               "query": [
                 {
                   "key": "page",
@@ -677,14 +616,8 @@
             },
             "url": {
               "raw": "{{base_url}}/games/greedy/bets",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "bets"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "bets"]
             },
             "description": "Places a bet using dynamically captured round/option IDs. Generates a fresh client_request_id each time."
           },
@@ -758,14 +691,8 @@
             },
             "url": {
               "raw": "{{base_url}}/games/greedy/bets",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "bets"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "bets"]
             },
             "description": "Replays the exact same bet request. Expected: HTTP 201 with the same bet_id and no second wallet debit."
           },
@@ -830,14 +757,8 @@
             },
             "url": {
               "raw": "{{base_url}}/games/greedy/bets",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "bets"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "bets"]
             },
             "description": "Negative test: same idempotency key with a different payload must be rejected with 409."
           },
@@ -879,14 +800,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/games/greedy/my-bets?page={{page}}&limit={{limit}}",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "my-bets"
-              ],
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "my-bets"],
               "query": [
                 {
                   "key": "page",
@@ -947,14 +862,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/games/greedy/rounds?page={{page}}&limit={{limit}}",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "rounds"
-              ],
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "rounds"],
               "query": [
                 {
                   "key": "page",
@@ -1010,15 +919,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/games/greedy/rounds/{{history_round_id}}",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "games",
-                "greedy",
-                "rounds",
-                "{{history_round_id}}"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["games", "greedy", "rounds", "{{history_round_id}}"]
             },
             "description": "Fetches a specific round. Uses history_round_id captured from round history or my bets."
           },
@@ -1077,15 +979,8 @@
             ],
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/config-versions",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "games",
-                "greedy",
-                "config-versions"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "games", "greedy", "config-versions"]
             },
             "description": "Lists all immutable Greedy config versions and captures latest draft/published config IDs."
           },
@@ -1152,15 +1047,8 @@
             },
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/config-versions",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "admin",
-                "games",
-                "greedy",
-                "config-versions"
-              ]
+              "host": ["{{base_url}}"],
+              "path": ["admin", "games", "greedy", "config-versions"]
             },
             "description": "Creates a new immutable draft config using environment-driven timing/limit values and baseline option math."
           },
@@ -1221,9 +1109,7 @@
             ],
             "url": {
               "raw": "{{base_url}}/admin/games/greedy/config-versions/{{draft_config_id}}/publish",
-              "host": [
-                "{{base_url}}"
-              ],
+              "host": ["{{base_url}}"],
               "path": [
                 "admin",
                 "games",
@@ -1248,9 +1134,7 @@
         "type": "text/javascript",
         "packages": {},
         "requests": {},
-        "exec": [
-          ""
-        ]
+        "exec": [""]
       }
     },
     {
