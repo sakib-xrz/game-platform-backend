@@ -16,6 +16,5 @@ src/generated/prisma
 *.log
 
 ### lockfiles ###
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
