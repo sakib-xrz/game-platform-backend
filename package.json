@@ -20,8 +20,6 @@
     "prisma:seed": "prisma db seed",
     "prisma:studio": "prisma studio",
     "prisma:harden": "prisma db execute --file prisma/hardening.sql",
-    "admin:bootstrap": "tsx src/cli/admin.ts bootstrap",
-    "admin:recover": "tsx src/cli/admin.ts recover",
     "test": "vitest run",
     "test:watch": "vitest"
   },
