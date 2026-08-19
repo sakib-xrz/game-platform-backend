@@ -1,5 +1,6 @@
 import express from 'express';
 import { GreedyRoutes } from '@/modules/greedy/greedy.routes';
+import { TeenPattiRoutes } from '@/modules/teen-patti/teen-patti.routes';
 import { WalletRoutes, WalletAdminRoutes } from '@/modules/wallet/wallet.routes';
 import { GameAdminRoutes } from '@/modules/game-admin/game-admin.routes';
 import AdminRoutes from '@/modules/admin/admin.routes';
@@ -29,6 +30,7 @@ router.get('/health/ready', async (_req, res, next) => {
 });
 
 router.use('/games/greedy', GreedyRoutes);
+router.use('/games/teen-patti', TeenPattiRoutes);
 router.use('/wallets', WalletRoutes);
 router.use('/admin/wallets', WalletAdminRoutes);
 router.use('/admin/games', GameAdminRoutes);

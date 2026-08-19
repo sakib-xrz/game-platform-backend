@@ -7,6 +7,7 @@ import {
   GameStatus,
   GreedyRuntimeStatus,
   PrismaClient,
+  TeenPattiRuntimeStatus,
 } from '../src/generated/prisma/client';
 import { hashAdminPassword, normalizeAdminEmail } from '../src/modules/admin/admin.crypto';
 
@@ -161,6 +162,87 @@ const main = async (): Promise<void> => {
     },
   });
 
+  const teen_patti_game = await prisma.game.upsert({
+    where: { code: 'TEEN_PATTI' },
+    create: { code: 'TEEN_PATTI', name: 'Teen Patti', status: GameStatus.active },
+    update: {},
+  });
+
+  let teen_patti_config = await prisma.teenPattiConfigVersion.findFirst({
+    where: { game_id: teen_patti_game.id, version: 1 },
+    include: { options: true },
+  });
+
+  if (!teen_patti_config) {
+    teen_patti_config = await prisma.teenPattiConfigVersion.create({
+      data: {
+        game_id: teen_patti_game.id,
+        version: 1,
+        status: ConfigVersionStatus.draft,
+        betting_duration_ms: 15000,
+        lock_duration_ms: 1500,
+        drawing_duration_ms: 5500,
+        result_duration_ms: 5000,
+        notes:
+          'Technical baseline. Three decks, highest Teen Patti hand wins the pot minus rake.',
+        chip_values: {
+          create: [
+            { amount: 10n, display_order: 1 },
+            { amount: 50n, display_order: 2 },
+            { amount: 100n, display_order: 3 },
+            { amount: 500n, display_order: 4 },
+            { amount: 1000n, display_order: 5 },
+            { amount: 5000n, display_order: 6 },
+          ],
+        },
+        options: {
+          create: [
+            { code: 'DECK_A', name: 'Hand 1', display_order: 1 },
+            { code: 'DECK_B', name: 'Hand 2', display_order: 2 },
+            { code: 'DECK_C', name: 'Hand 3', display_order: 3 },
+          ],
+        },
+      },
+      include: { options: true },
+    });
+
+    teen_patti_config = await prisma.teenPattiConfigVersion.update({
+      where: { id: teen_patti_config.id },
+      data: { status: ConfigVersionStatus.review_pending },
+      include: { options: true },
+    });
+    teen_patti_config = await prisma.teenPattiConfigVersion.update({
+      where: { id: teen_patti_config.id },
+      data: {
+        status: ConfigVersionStatus.published,
+        published_at: new Date(),
+      },
+      include: { options: true },
+    });
+  } else {
+    teen_patti_config = await prisma.teenPattiConfigVersion.update({
+      where: { id: teen_patti_config.id },
+      data: {
+        lock_duration_ms: 1500,
+        drawing_duration_ms: 5500,
+        result_duration_ms: 5000,
+      },
+      include: { options: true },
+    });
+  }
+
+  await prisma.teenPattiRuntimeState.upsert({
+    where: { game_id: teen_patti_game.id },
+    create: {
+      game_id: teen_patti_game.id,
+      active_config_version_id: teen_patti_config.id,
+      status: TeenPattiRuntimeStatus.stopped,
+    },
+    update: {
+      active_config_version_id: teen_patti_config.id,
+    },
+  });
+
   const admin_email = normalizeAdminEmail(
     process.env.ADMIN_SEED_EMAIL || 'admin@example.com',
   );
@@ -210,7 +292,9 @@ const main = async (): Promise<void> => {
     seeded: true,
     currency: currency.code,
     game: game.code,
+    teen_patti_game: teen_patti_game.code,
     config_version: greedy_config.version,
+    teen_patti_config_version: teen_patti_config.version,
     runtime_status: 'stopped',
     admin: admin.email,
   });

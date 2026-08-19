@@ -10,11 +10,17 @@ import {
   recoverGreedyRuntime,
   runGreedyTick,
 } from '@/workers/greedy-round.worker';
+import {
+  recoverTeenPattiRuntime,
+  runTeenPattiTick,
+} from '@/workers/teen-patti-round.worker';
 import { logger } from '@/utils/logger';
 
-const LEASE_KEY = 'game-worker:greedy';
+const GREEDY_LEASE_KEY = 'game-worker:greedy';
+const TEEN_PATTI_LEASE_KEY = 'game-worker:teen-patti';
 let stopping = false;
-let leader = false;
+let greedy_leader = false;
+let teen_patti_leader = false;
 let last_lease_refresh = 0;
 let health_server: http.Server | undefined;
 
@@ -43,30 +49,36 @@ const main = async (): Promise<void> => {
   await prisma.$connect();
   await connectRedis();
   await recoverGreedyRuntime();
+  await recoverTeenPattiRuntime();
   health_server = await startHealthServer(config.worker_health_port);
-  logger.info('greedy_worker_started', {
+  logger.info('game_worker_started', {
     instance_id: config.worker_instance_id,
   });
 
   while (!stopping) {
     try {
-      if (!leader || Date.now() - last_lease_refresh >= 2000) {
-        leader = await acquireOrRenewLease(
-          LEASE_KEY,
+      if (Date.now() - last_lease_refresh >= 2000) {
+        greedy_leader = await acquireOrRenewLease(
+          GREEDY_LEASE_KEY,
+          config.worker_instance_id,
+        );
+        teen_patti_leader = await acquireOrRenewLease(
+          TEEN_PATTI_LEASE_KEY,
           config.worker_instance_id,
         );
         last_lease_refresh = Date.now();
       }
 
-      if (leader) {
-        // A shutdown signal only flips `stopping`. The current authoritative
-        // tick is allowed to finish before the lease and connections are
-        // released, which avoids overlapping leaders during deployments.
+      if (greedy_leader) {
         await runGreedyTick();
       }
+      if (teen_patti_leader) {
+        await runTeenPattiTick();
+      }
     } catch (error) {
-      logger.error('greedy_worker_tick_failed', { error });
-      leader = false;
+      logger.error('game_worker_tick_failed', { error });
+      greedy_leader = false;
+      teen_patti_leader = false;
     }
 
     if (!stopping) await sleep(config.greedy_worker_poll_ms);
@@ -75,11 +87,14 @@ const main = async (): Promise<void> => {
 
 const cleanup = async (): Promise<void> => {
   try {
-    if (leader) {
-      await releaseLease(LEASE_KEY, config.worker_instance_id);
+    if (greedy_leader) {
+      await releaseLease(GREEDY_LEASE_KEY, config.worker_instance_id);
+    }
+    if (teen_patti_leader) {
+      await releaseLease(TEEN_PATTI_LEASE_KEY, config.worker_instance_id);
     }
   } catch (error) {
-    logger.warn('greedy_worker_lease_release_failed', { error });
+    logger.warn('game_worker_lease_release_failed', { error });
   }
 
   await disconnectRedis();
@@ -95,7 +110,7 @@ const cleanup = async (): Promise<void> => {
 
 const requestShutdown = (signal: string): void => {
   if (stopping) return;
-  logger.info('greedy_worker_shutdown_requested', { signal });
+  logger.info('game_worker_shutdown_requested', { signal });
   stopping = true;
 };
 
@@ -105,7 +120,7 @@ process.on('SIGTERM', () => requestShutdown('SIGTERM'));
 main()
   .then(cleanup)
   .catch(async (error) => {
-    logger.error('greedy_worker_start_failed', { error });
+    logger.error('game_worker_start_failed', { error });
     stopping = true;
     await cleanup();
     process.exit(1);

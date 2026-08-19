@@ -50,6 +50,30 @@ enum GreedyRoundStatus {
   @@map("greedy_round_status")
 }
 
+enum TeenPattiRuntimeStatus {
+  stopped
+  running
+  paused
+  degraded
+
+  @@map("teen_patti_runtime_status")
+}
+
+enum TeenPattiRoundStatus {
+  created
+  betting_open
+  betting_locked
+  result_ready
+  drawing
+  result_revealed
+  settling
+  settled
+  closed
+  cancelled
+
+  @@map("teen_patti_round_status")
+}
+
 enum WalletLedgerType {
   bet_debit
   win_credit
@@ -187,6 +211,9 @@ model Wallet {
   bets     GreedyBet[]
   payouts  GreedyUserPayout[]
   refunds  GreedyUserRefund[]
+  teen_patti_bets    TeenPattiBet[]
+  teen_patti_payouts TeenPattiUserPayout[]
+  teen_patti_refunds TeenPattiUserRefund[]
 
   @@unique([user_id, currency_id])
   @@index([user_id])
@@ -214,6 +241,9 @@ model WalletLedger {
   debit_bet GreedyBet?        @relation("bet_debit_ledger")
   payout    GreedyUserPayout? @relation("payout_ledger")
   refund    GreedyUserRefund? @relation("refund_ledger")
+  teen_patti_debit_bet TeenPattiBet?        @relation("teen_patti_bet_debit_ledger")
+  teen_patti_payout    TeenPattiUserPayout? @relation("teen_patti_payout_ledger")
+  teen_patti_refund    TeenPattiUserRefund? @relation("teen_patti_refund_ledger")
 
   @@index([wallet_id, created_at])
   @@index([user_id, created_at])
@@ -235,6 +265,10 @@ model Game {
   greedy_config_versions GreedyConfigVersion[]
   greedy_rounds          GreedyRound[]
   greedy_bets            GreedyBet[]
+  teen_patti_runtime_state   TeenPattiRuntimeState?
+  teen_patti_config_versions TeenPattiConfigVersion[]
+  teen_patti_rounds          TeenPattiRound[]
+  teen_patti_bets            TeenPattiBet[]
 
   @@map("games")
 }
@@ -470,6 +504,234 @@ model GreedyUserRefund {
   @@map("greedy_user_refunds")
 }
 
+model TeenPattiRuntimeState {
+  id                       String                @id @default(cuid())
+  game_id                  String                @unique
+  current_round_id         String?               @unique
+  active_config_version_id String?
+  status                   TeenPattiRuntimeStatus @default(stopped)
+  last_round_number        BigInt                @default(0)
+  revision                 BigInt                @default(0)
+  updated_at               DateTime              @updatedAt
+  created_at               DateTime              @default(now())
+
+  game                  Game                   @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  current_round         TeenPattiRound?        @relation("teen_patti_runtime_current_round", fields: [current_round_id], references: [id], onDelete: SetNull)
+  active_config_version TeenPattiConfigVersion? @relation("teen_patti_runtime_active_config", fields: [active_config_version_id], references: [id], onDelete: Restrict)
+
+  @@map("teen_patti_runtime_state")
+}
+
+model TeenPattiConfigVersion {
+  id                     String              @id @default(cuid())
+  game_id                String
+  version                Int
+  status                 ConfigVersionStatus @default(draft)
+  betting_duration_ms    Int
+  lock_duration_ms       Int
+  drawing_duration_ms    Int
+  result_duration_ms     Int
+  min_bet                BigInt
+  max_single_bet         BigInt
+  max_round_bet          BigInt
+  rake_bps               Int
+  created_by             String?
+  notes                  String?
+  created_at             DateTime            @default(now())
+  updated_at             DateTime            @updatedAt
+  published_at           DateTime?
+  retired_at             DateTime?
+
+  game                  Game                      @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  options               TeenPattiOptionVersion[]
+  chip_values           TeenPattiChipValueVersion[]
+  rounds                TeenPattiRound[]
+  results               TeenPattiRoundResult[]
+  active_runtime_states TeenPattiRuntimeState[]   @relation("teen_patti_runtime_active_config")
+
+  @@unique([game_id, version])
+  @@index([game_id, status])
+  @@map("teen_patti_config_versions")
+}
+
+model TeenPattiChipValueVersion {
+  id                String   @id @default(cuid())
+  config_version_id String
+  amount            BigInt
+  display_order     Int
+  is_enabled        Boolean  @default(true)
+  created_at        DateTime @default(now())
+
+  config_version TeenPattiConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+
+  @@unique([config_version_id, amount])
+  @@unique([config_version_id, display_order])
+  @@index([config_version_id, is_enabled])
+  @@map("teen_patti_chip_value_versions")
+}
+
+model TeenPattiOptionVersion {
+  id            String   @id @default(cuid())
+  config_version_id String
+  code          String
+  name          String
+  image_url     String?
+  asset_id      String?
+  display_order Int
+  is_enabled    Boolean  @default(true)
+  created_at    DateTime @default(now())
+
+  config_version  TeenPattiConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  asset           AdminAsset?            @relation(fields: [asset_id], references: [id], onDelete: Restrict)
+  bets            TeenPattiBet[]
+  winning_results TeenPattiRoundResult[] @relation("teen_patti_winning_option")
+
+  @@unique([config_version_id, code])
+  @@unique([config_version_id, display_order])
+  @@index([config_version_id, is_enabled])
+  @@map("teen_patti_option_versions")
+}
+
+model TeenPattiRound {
+  id                    String              @id @default(cuid())
+  game_id               String
+  round_number          BigInt
+  config_version_id     String
+  status                TeenPattiRoundStatus @default(created)
+  betting_started_at    DateTime?
+  betting_ends_at       DateTime?
+  locked_at             DateTime?
+  result_generated_at   DateTime?
+  drawing_started_at    DateTime?
+  result_reveal_at      DateTime?
+  settlement_started_at DateTime?
+  settled_at            DateTime?
+  closed_at             DateTime?
+  cancelled_at          DateTime?
+  cancellation_reason   String?
+  created_at            DateTime            @default(now())
+  updated_at            DateTime            @updatedAt
+
+  game            Game                    @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  config_version  TeenPattiConfigVersion  @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  result          TeenPattiRoundResult?
+  bets            TeenPattiBet[]
+  settlements     TeenPattiBetSettlement[]
+  payouts         TeenPattiUserPayout[]
+  refunds         TeenPattiUserRefund[]
+  runtime_current TeenPattiRuntimeState?  @relation("teen_patti_runtime_current_round")
+
+  @@unique([game_id, round_number])
+  @@index([game_id, status])
+  @@index([status, betting_ends_at])
+  @@index([created_at])
+  @@map("teen_patti_rounds")
+}
+
+model TeenPattiRoundResult {
+  id                        String   @id @default(cuid())
+  round_id                  String   @unique
+  winning_option_version_id String
+  algorithm_version         String
+  config_version_id         String
+  entropy_digest            String
+  audit_hash                String
+  deal_attempt_count        Int
+  hands                     Json
+  generated_at              DateTime @default(now())
+  revealed_at               DateTime?
+
+  round          TeenPattiRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  winning_option TeenPattiOptionVersion @relation("teen_patti_winning_option", fields: [winning_option_version_id], references: [id], onDelete: Restrict)
+  config_version TeenPattiConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  settlements    TeenPattiBetSettlement[]
+
+  @@index([generated_at])
+  @@map("teen_patti_round_results")
+}
+
+model TeenPattiBet {
+  id                     String   @id @default(cuid())
+  game_id                String
+  round_id               String
+  user_id                String
+  wallet_id              String
+  option_version_id      String
+  amount                 BigInt
+  client_request_id      String
+  wallet_debit_ledger_id String   @unique
+  accepted_at            DateTime @default(now())
+  created_at             DateTime @default(now())
+
+  game         Game                   @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  round        TeenPattiRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet       Wallet                 @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  option       TeenPattiOptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
+  debit_ledger WalletLedger           @relation("teen_patti_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  settlement   TeenPattiBetSettlement?
+
+  @@unique([user_id, client_request_id])
+  @@index([round_id, user_id])
+  @@index([round_id, option_version_id])
+  @@index([user_id, created_at])
+  @@map("teen_patti_bets")
+}
+
+model TeenPattiBetSettlement {
+  id            String            @id @default(cuid())
+  round_id      String
+  bet_id        String            @unique
+  result_id     String?
+  outcome       SettlementOutcome
+  payout_amount BigInt            @default(0)
+  settled_at    DateTime          @default(now())
+
+  round  TeenPattiRound       @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  bet    TeenPattiBet         @relation(fields: [bet_id], references: [id], onDelete: Restrict)
+  result TeenPattiRoundResult? @relation(fields: [result_id], references: [id], onDelete: Restrict)
+
+  @@index([round_id, outcome])
+  @@map("teen_patti_bet_settlements")
+}
+
+model TeenPattiUserPayout {
+  id                  String   @id @default(cuid())
+  round_id            String
+  user_id             String
+  wallet_id           String
+  winning_bet_count   Int
+  total_winning_stake BigInt
+  total_payout        BigInt
+  wallet_ledger_id    String   @unique
+  created_at          DateTime @default(now())
+
+  round         TeenPattiRound @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet        Wallet         @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger   @relation("teen_patti_payout_ledger", fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([round_id, user_id])
+  @@index([user_id, created_at])
+  @@map("teen_patti_user_payouts")
+}
+
+model TeenPattiUserRefund {
+  id               String   @id @default(cuid())
+  round_id         String
+  user_id          String
+  wallet_id        String
+  total_bet_amount BigInt
+  wallet_ledger_id String   @unique
+  created_at       DateTime @default(now())
+
+  round         TeenPattiRound @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet        Wallet         @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger   @relation("teen_patti_refund_ledger", fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([round_id, user_id])
+  @@index([user_id, created_at])
+  @@map("teen_patti_user_refunds")
+}
+
 model IdempotencyRecord {
   id              String            @id @default(cuid())
   user_id         String
@@ -670,6 +932,7 @@ model AdminAsset {
 
   uploaded_by AdminUser             @relation(fields: [uploaded_by_admin_id], references: [id], onDelete: Restrict)
   options    GreedyOptionVersion[]
+  teen_patti_options TeenPattiOptionVersion[]
 
   @@index([status, created_at])
   @@map("admin_assets")

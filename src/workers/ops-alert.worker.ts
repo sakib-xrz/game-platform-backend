@@ -1,5 +1,6 @@
 import { logger } from '@/utils/logger';
-import OpsService from '@/modules/game-admin/greedy-admin-ops.services';
+import GreedyOpsService from '@/modules/game-admin/greedy-admin-ops.services';
+import TeenPattiOpsService from '@/modules/game-admin/teen-patti-admin-ops.services';
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
@@ -7,7 +8,10 @@ let running = false;
 export const refreshOpsAlerts = async (): Promise<void> => {
   if (running) return;
   running = true;
-  try { await OpsService.refreshOperationalAlerts(); }
+  try {
+    await GreedyOpsService.refreshOperationalAlerts();
+    await TeenPattiOpsService.refreshOperationalAlerts();
+  }
   catch (error) { logger.warn('ops_alert_refresh_failed', { error }); }
   finally { running = false; }
 };

@@ -5,6 +5,7 @@ The Socket layer is notification/recovery acceleration, not the authoritative wr
 ## Rooms
 
 - `game:greedy` — all Greedy clients
+- `game:teen-patti` — all Teen Patti clients
 - `user:<user_id>` — user-private wallet/bet notifications after real auth is integrated
 
 ## Server -> client events
@@ -75,7 +76,35 @@ Private `user:<user_id>` notification mirroring the accepted REST bet response.
 
 ### `wallet.balance.updated`
 
-Private user event. `reason` is currently one of `greedy_bet`, `greedy_win`, `greedy_refund`, or `admin_adjustment`.
+Private user event. `reason` is currently one of `greedy_bet`, `greedy_win`, `greedy_refund`, `teen_patti_bet`, `teen_patti_win`, `teen_patti_refund`, or `admin_adjustment`.
+
+## Teen Patti events
+
+New connections join both `game:greedy` and `game:teen-patti`. Clients should ignore events they do not handle.
+
+### `teen_patti.round.opened`
+
+Contains `round_id`, `round_number`, timestamps, `rake_bps`, three public decks, and chip values.
+
+### `teen_patti.round.locked`
+
+Contains `round_id` and `locked_at`.
+
+### `teen_patti.round.drawing`
+
+Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. Hands and winner are hidden.
+
+### `teen_patti.round.result`
+
+Emitted only at reveal. Contains the winning deck, the three 3-card hands (`cards`, `category`, `rank_key`), and `revealed_at`.
+
+### `teen_patti.round.settled` / `closed` / `cancelled` / `refunded`
+
+Same round-lifecycle meaning as Greedy.
+
+### `teen_patti.bet.accepted`
+
+Private `user:<user_id>` notification mirroring the accepted REST bet.
 
 ## Client recovery rule
 
@@ -83,6 +112,12 @@ A Socket reconnect is not enough to establish authoritative state. On initial lo
 
 ```text
 GET /api/v1/games/greedy/snapshot
+```
+
+or, for Teen Patti:
+
+```text
+GET /api/v1/games/teen-patti/snapshot
 ```
 
 Then continue listening to Socket events. Every durable outbox event includes `event_id`; clients should de-duplicate repeated IDs.
