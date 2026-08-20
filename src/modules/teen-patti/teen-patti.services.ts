@@ -7,17 +7,23 @@ import {
 } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
-import { ensureWallet } from '@/modules/wallet/wallet.services';
+import {
+  ensureWallet,
+  WalletInitializationRequiredError,
+  withWalletInitializationRetry,
+} from '@/modules/wallet/wallet.services';
 import { getPagination } from '@/utils/pagination';
 import { sha256 } from '@/utils/hash';
 import { toJsonSafe } from '@/utils/json-safe';
 import { withSerializableRetry } from '@/modules/greedy/greedy.utils';
 import {
+  TEEN_PATTI_CURRENCY_CODE,
   TEEN_PATTI_GAME_CODE,
   TEEN_PATTI_IDEMPOTENCY_SCOPE,
 } from './teen-patti.constant';
 import type { BetResponse } from './teen-patti.types';
 import type { PlaceBetBody } from './teen-patti.validation';
+import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
 import { randomUUID } from 'node:crypto';
 
 const public_result_statuses: TeenPattiRoundStatus[] = [
@@ -56,6 +62,7 @@ const publicConfigSelect = {
   rake_bps: true,
   options: {
     select: publicOptionSelect,
+    where: { is_enabled: true },
     orderBy: { display_order: 'asc' as const },
   },
   chip_values: {
@@ -87,96 +94,194 @@ const requestHash = (payload: PlaceBetBody): string =>
   );
 
 const getSnapshot = async (user_id: string) => {
-  const game = await prisma.game.findUnique({
-    where: { code: TEEN_PATTI_GAME_CODE },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      status: true,
-      teen_patti_runtime_state: {
-        select: {
-          status: true,
-          revision: true,
-          active_config_version: { select: publicConfigSelect },
-          current_round: {
-            select: {
-              id: true,
-              round_number: true,
-              status: true,
-              betting_started_at: true,
-              betting_ends_at: true,
-              drawing_started_at: true,
-              result_reveal_at: true,
-              config_version: { select: publicConfigSelect },
-              result: { select: publicResultSelect },
+  const [
+    game,
+    wallet,
+    current_bets,
+    current_option_pot_totals,
+    history_candidates,
+    config_candidates,
+    current_result_candidate,
+  ] = await Promise.all([
+    prisma.game.findUnique({
+      where: { code: TEEN_PATTI_GAME_CODE },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        status: true,
+        teen_patti_runtime_state: {
+          select: {
+            status: true,
+            revision: true,
+            active_config_version_id: true,
+            current_round: {
+              select: {
+                id: true,
+                round_number: true,
+                config_version_id: true,
+                status: true,
+                betting_started_at: true,
+                betting_ends_at: true,
+                drawing_started_at: true,
+                result_reveal_at: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    }),
+    ensureWallet(user_id),
+    prisma.teenPattiBet.findMany({
+      where: {
+        user_id,
+        round: {
+          game: { code: TEEN_PATTI_GAME_CODE },
+          runtime_current: { isNot: null },
+        },
+      },
+      select: {
+        id: true,
+        round_id: true,
+        amount: true,
+        accepted_at: true,
+        option: { select: publicOptionSelect },
+        settlement: {
+          select: {
+            outcome: true,
+            payout_amount: true,
+            settled_at: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+    }),
+    prisma.teenPattiBet.groupBy({
+      by: ['round_id', 'option_version_id'],
+      where: {
+        round: {
+          game: { code: TEEN_PATTI_GAME_CODE },
+          runtime_current: { isNot: null },
+        },
+      },
+      _sum: { amount: true },
+    }),
+    prisma.teenPattiRound.findMany({
+      where: {
+        game: { code: TEEN_PATTI_GAME_CODE },
+        status: { in: public_result_statuses },
+        result: { isNot: null },
+      },
+      select: {
+        id: true,
+        round_number: true,
+        status: true,
+        result_reveal_at: true,
+        closed_at: true,
+        result: { select: publicResultSelect },
+      },
+      orderBy: { round_number: 'desc' },
+      take: 21,
+    }),
+    prisma.teenPattiConfigVersion.findMany({
+      where: {
+        OR: [
+          {
+            active_runtime_states: {
+              some: { game: { code: TEEN_PATTI_GAME_CODE } },
+            },
+          },
+          {
+            rounds: {
+              some: {
+                game: { code: TEEN_PATTI_GAME_CODE },
+                runtime_current: { isNot: null },
+              },
+            },
+          },
+        ],
+      },
+      select: publicConfigSelect,
+    }),
+    prisma.teenPattiRoundResult.findFirst({
+      where: {
+        round: {
+          game: { code: TEEN_PATTI_GAME_CODE },
+          runtime_current: { isNot: null },
+        },
+      },
+      select: publicResultSelect,
+    }),
+  ]);
 
-  if (!game || !game.teen_patti_runtime_state) {
+  if (
+    !game ||
+    !game.teen_patti_runtime_state ||
+    !game.teen_patti_runtime_state.active_config_version_id
+  ) {
     throw new AppError(
       httpStatus.SERVICE_UNAVAILABLE,
-      'Teen Patti game is not initialized',
+      'Teen Patti game is not fully initialized',
     );
   }
 
-  const wallet = await ensureWallet(user_id);
   const current_round = game.teen_patti_runtime_state.current_round;
+  const required_config_ids = new Set([
+    game.teen_patti_runtime_state.active_config_version_id,
+    ...(current_round ? [current_round.config_version_id] : []),
+  ]);
+  let config_versions = config_candidates;
+  const missing_config_ids = [...required_config_ids].filter(
+    (config_id) => !config_versions.some((config) => config.id === config_id),
+  );
+  if (missing_config_ids.length) {
+    const fallback_configs = await prisma.teenPattiConfigVersion.findMany({
+      where: { id: { in: missing_config_ids } },
+      select: publicConfigSelect,
+    });
+    config_versions = [...config_versions, ...fallback_configs];
+  }
+  const active_config = config_versions.find(
+    (config) =>
+      config.id === game.teen_patti_runtime_state!.active_config_version_id,
+  );
+  const current_config = current_round
+    ? config_versions.find(
+        (config) => config.id === current_round.config_version_id,
+      )
+    : null;
+  if (!active_config || (current_round && !current_config)) {
+    throw new AppError(
+      httpStatus.SERVICE_UNAVAILABLE,
+      'Teen Patti game configuration is unavailable',
+    );
+  }
 
   const my_bets = current_round
-    ? await prisma.teenPattiBet.findMany({
-        where: { round_id: current_round.id, user_id },
-        select: {
-          id: true,
-          round_id: true,
-          amount: true,
-          accepted_at: true,
-          option: { select: publicOptionSelect },
-          settlement: {
-            select: {
-              outcome: true,
-              payout_amount: true,
-              settled_at: true,
-            },
-          },
-        },
-        orderBy: { created_at: 'asc' },
-      })
+    ? current_bets.filter((bet) => bet.round_id === current_round.id)
     : [];
-
   const option_pot_totals = current_round
-    ? await prisma.teenPattiBet.groupBy({
-        by: ['option_version_id'],
-        where: { round_id: current_round.id },
-        _sum: { amount: true },
-      })
+    ? current_option_pot_totals.filter(
+        (row) => row.round_id === current_round.id,
+      )
     : [];
-
-  const history = await prisma.teenPattiRound.findMany({
-    where: {
-      game_id: game.id,
-      status: { in: public_result_statuses },
-      result: { isNot: null },
-    },
-    select: {
-      id: true,
-      round_number: true,
-      status: true,
-      result_reveal_at: true,
-      closed_at: true,
-      result: { select: publicResultSelect },
-    },
-    orderBy: { round_number: 'desc' },
-    take: 20,
-  });
+  const history = history_candidates
+    .filter((round) => round.id !== current_round?.id)
+    .slice(0, 20);
 
   const result_is_public = current_round
     ? public_result_statuses.includes(current_round.status)
     : false;
+  let current_result =
+    current_result_candidate?.round_id === current_round?.id
+      ? current_result_candidate
+      : null;
+  if (current_round && result_is_public && !current_result) {
+    current_result = await prisma.teenPattiRoundResult.findUnique({
+      where: { round_id: current_round.id },
+      select: publicResultSelect,
+    });
+  }
 
   return {
     server_time: new Date(),
@@ -185,7 +290,7 @@ const getSnapshot = async (user_id: string) => {
       status: game.teen_patti_runtime_state.status,
       revision: game.teen_patti_runtime_state.revision,
     },
-    active_config: game.teen_patti_runtime_state.active_config_version,
+    active_config,
     round: current_round
       ? {
           id: current_round.id,
@@ -195,14 +300,24 @@ const getSnapshot = async (user_id: string) => {
           betting_ends_at: current_round.betting_ends_at,
           drawing_started_at: current_round.drawing_started_at,
           result_reveal_at: current_round.result_reveal_at,
-          options: current_round.config_version.options,
-          chip_values: current_round.config_version.chip_values,
-          rake_bps: current_round.config_version.rake_bps,
+          config_version_id: current_round.config_version_id,
+          betting_duration_ms:
+            current_config!.betting_duration_ms,
+          lock_duration_ms: current_config!.lock_duration_ms,
+          drawing_duration_ms:
+            current_config!.drawing_duration_ms,
+          result_duration_ms: current_config!.result_duration_ms,
+          min_bet: current_config!.min_bet,
+          max_single_bet: current_config!.max_single_bet,
+          max_round_bet: current_config!.max_round_bet,
+          options: current_config!.options,
+          chip_values: current_config!.chip_values,
+          rake_bps: current_config!.rake_bps,
           option_pot_totals: option_pot_totals.map((row) => ({
             option_id: row.option_version_id,
             total_amount: (row._sum.amount ?? 0n).toString(),
           })),
-          result: result_is_public ? current_round.result : null,
+          result: result_is_public ? current_result : null,
         }
       : null,
     wallet,
@@ -219,17 +334,45 @@ const placeBetTransaction = async (
   const req_hash = requestHash(payload);
 
   return withSerializableRetry(async (tx) => {
-    const existing = await tx.idempotencyRecord.findUnique({
-      where: {
-        user_id_scope_idempotency_key: {
-          user_id,
-          scope: TEEN_PATTI_IDEMPOTENCY_SCOPE,
-          idempotency_key: payload.client_request_id,
-        },
-      },
-    });
+    const idempotency_rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      INSERT INTO idempotency_records (
+        id,
+        user_id,
+        scope,
+        idempotency_key,
+        request_hash,
+        expires_at,
+        updated_at
+      )
+      VALUES (
+        ${randomUUID()},
+        ${user_id},
+        ${TEEN_PATTI_IDEMPOTENCY_SCOPE},
+        ${payload.client_request_id},
+        ${req_hash},
+        ${new Date(Date.now() + 24 * 60 * 60 * 1000)},
+        CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (user_id, scope, idempotency_key) DO NOTHING
+      RETURNING id
+    `);
 
-    if (existing) {
+    if (!idempotency_rows.length) {
+      const existing = await tx.idempotencyRecord.findUnique({
+        where: {
+          user_id_scope_idempotency_key: {
+            user_id,
+            scope: TEEN_PATTI_IDEMPOTENCY_SCOPE,
+            idempotency_key: payload.client_request_id,
+          },
+        },
+      });
+      if (!existing) {
+        throw new AppError(
+          httpStatus.CONFLICT,
+          'The same bet request is already being processed',
+        );
+      }
       if (existing.request_hash !== req_hash) {
         throw new AppError(
           httpStatus.CONFLICT,
@@ -248,56 +391,60 @@ const placeBetTransaction = async (
       );
     }
 
-    await tx.idempotencyRecord.create({
-      data: {
-        user_id,
-        scope: TEEN_PATTI_IDEMPOTENCY_SCOPE,
-        idempotency_key: payload.client_request_id,
-        request_hash: req_hash,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
-    });
+    const round_barrier = await tx.$queryRaw<
+      Array<{
+        id: string;
+        game_id: string;
+        game_code: string;
+        game_status: string;
+        runtime_round_id: string | null;
+        status: string;
+        betting_ends_at: Date | null;
+        server_now: Date;
+        option_id: string | null;
+        min_bet: bigint;
+        max_single_bet: bigint;
+        max_round_bet: bigint;
+      }>
+    >(Prisma.sql`
+      SELECT
+        game_round.id,
+        game_round.game_id,
+        game.code AS game_code,
+        game.status::text AS game_status,
+        runtime.current_round_id AS runtime_round_id,
+        game_round.status::text AS status,
+        game_round.betting_ends_at,
+        CURRENT_TIMESTAMP AS server_now,
+        betting_option.id AS option_id,
+        config.min_bet,
+        config.max_single_bet,
+        config.max_round_bet
+      FROM teen_patti_rounds AS game_round
+      JOIN games AS game ON game.id = game_round.game_id
+      JOIN teen_patti_config_versions AS config
+        ON config.id = game_round.config_version_id
+      LEFT JOIN teen_patti_runtime_state AS runtime
+        ON runtime.game_id = game_round.game_id
+      LEFT JOIN teen_patti_option_versions AS betting_option
+        ON betting_option.id = ${payload.option_id}
+        AND betting_option.config_version_id = game_round.config_version_id
+        AND betting_option.is_enabled = TRUE
+      WHERE game_round.id = ${payload.round_id}
+      FOR SHARE OF game_round
+    `);
 
-    const game = await tx.game.findUnique({
-      where: { code: TEEN_PATTI_GAME_CODE },
-    });
-    if (!game || game.status !== 'active') {
+    const barrier = round_barrier[0];
+    if (barrier && barrier.game_status !== 'active') {
       throw new AppError(
         httpStatus.SERVICE_UNAVAILABLE,
         'Teen Patti is not accepting bets',
       );
     }
-
-    const runtime = await tx.teenPattiRuntimeState.findUnique({
-      where: { game_id: game.id },
-      select: { current_round_id: true },
-    });
-
-    const round_barrier = await tx.$queryRaw<
-      Array<{
-        id: string;
-        game_id: string;
-        status: string;
-        betting_ends_at: Date | null;
-        server_now: Date;
-      }>
-    >(Prisma.sql`
-      SELECT
-        id,
-        game_id,
-        status::text AS status,
-        betting_ends_at,
-        CURRENT_TIMESTAMP AS server_now
-      FROM teen_patti_rounds
-      WHERE id = ${payload.round_id}
-      FOR SHARE
-    `);
-
-    const barrier = round_barrier[0];
     if (
       !barrier ||
-      runtime?.current_round_id !== barrier.id ||
-      barrier.game_id !== game.id ||
+      barrier.game_code !== TEEN_PATTI_GAME_CODE ||
+      barrier.runtime_round_id !== barrier.id ||
       barrier.status !== TeenPattiRoundStatus.betting_open ||
       !barrier.betting_ends_at ||
       barrier.server_now >= barrier.betting_ends_at
@@ -308,71 +455,88 @@ const placeBetTransaction = async (
       );
     }
 
-    const round = await tx.teenPattiRound.findUnique({
-      where: { id: barrier.id },
-      include: { config_version: true },
-    });
-
-    if (!round) {
-      throw new AppError(httpStatus.CONFLICT, 'Betting is closed for this round');
-    }
-
-    const option = await tx.teenPattiOptionVersion.findFirst({
-      where: {
-        id: payload.option_id,
-        config_version_id: round.config_version_id,
-        is_enabled: true,
-      },
-    });
-    if (!option) {
+    if (!barrier.option_id) {
       throw new AppError(httpStatus.BAD_REQUEST, 'Invalid betting deck');
     }
 
-    const game_config = round.config_version;
-    if (amount < game_config.min_bet || amount > game_config.max_single_bet) {
+    if (amount < barrier.min_bet || amount > barrier.max_single_bet) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
-        `Bet must be between ${game_config.min_bet.toString()} and ${game_config.max_single_bet.toString()}`,
+        `Bet must be between ${barrier.min_bet.toString()} and ${barrier.max_single_bet.toString()}`,
       );
     }
 
     const exposure = await tx.teenPattiBet.aggregate({
-      where: { round_id: round.id, user_id },
+      where: { round_id: barrier.id, user_id },
       _sum: { amount: true },
     });
-    if ((exposure._sum.amount ?? 0n) + amount > game_config.max_round_bet) {
+    if ((exposure._sum.amount ?? 0n) + amount > barrier.max_round_bet) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
         'Maximum round bet limit exceeded',
       );
     }
 
-    const wallet = await ensureWallet(user_id, tx);
-    if (wallet.balance < amount) {
+    const wallet_rows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        balance_before: bigint;
+        balance_after: bigint;
+        version: number;
+      }>
+    >(Prisma.sql`
+      UPDATE wallets AS wallet
+      SET
+        balance = wallet.balance - ${amount},
+        version = wallet.version + 1,
+        updated_at = CURRENT_TIMESTAMP
+      FROM currencies AS currency
+      WHERE wallet.user_id = ${user_id}
+        AND wallet.currency_id = currency.id
+        AND currency.code = ${TEEN_PATTI_CURRENCY_CODE}
+        AND currency.is_active = TRUE
+        AND wallet.balance >= ${amount}
+      RETURNING
+        wallet.id,
+        wallet.balance + ${amount} AS balance_before,
+        wallet.balance AS balance_after,
+        wallet.version
+    `);
+    const debited_wallet = wallet_rows[0];
+    if (!debited_wallet) {
+      const wallet = await tx.wallet.findFirst({
+        where: {
+          user_id,
+          currency: {
+            code: TEEN_PATTI_CURRENCY_CODE,
+            is_active: true,
+          },
+        },
+        select: { balance: true },
+      });
+      if (!wallet) throw new WalletInitializationRequiredError();
+      if (wallet.balance >= amount) {
+        throw new AppError(
+          httpStatus.CONFLICT,
+          'Wallet balance changed; retry the bet',
+        );
+      }
       throw new AppError(
         httpStatus.BAD_REQUEST,
         'Insufficient wallet balance',
       );
     }
 
-    const updated_wallet = await tx.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: { decrement: amount },
-        version: { increment: 1 },
-      },
-    });
-
     const bet_id = randomUUID();
     const ledger = await tx.walletLedger.create({
       data: {
-        wallet_id: wallet.id,
+        wallet_id: debited_wallet.id,
         user_id,
-        game_id: game.id,
+        game_id: barrier.game_id,
         type: WalletLedgerType.bet_debit,
         amount: -amount,
-        balance_before: wallet.balance,
-        balance_after: updated_wallet.balance,
+        balance_before: debited_wallet.balance_before,
+        balance_after: debited_wallet.balance_after,
         reference_type: 'teen_patti_bet',
         reference_id: bet_id,
         idempotency_key: payload.client_request_id,
@@ -382,11 +546,11 @@ const placeBetTransaction = async (
     const bet = await tx.teenPattiBet.create({
       data: {
         id: bet_id,
-        game_id: game.id,
-        round_id: round.id,
+        game_id: barrier.game_id,
+        round_id: barrier.id,
         user_id,
-        wallet_id: wallet.id,
-        option_version_id: option.id,
+        wallet_id: debited_wallet.id,
+        option_version_id: barrier.option_id,
         amount,
         client_request_id: payload.client_request_id,
         wallet_debit_ledger_id: ledger.id,
@@ -395,10 +559,12 @@ const placeBetTransaction = async (
 
     const response: BetResponse = {
       bet_id: bet.id,
-      round_id: round.id,
-      option_id: option.id,
+      round_id: barrier.id,
+      option_id: barrier.option_id,
       amount: amount.toString(),
-      wallet_balance: updated_wallet.balance.toString(),
+      client_request_id: payload.client_request_id,
+      wallet_balance: debited_wallet.balance_after.toString(),
+      wallet_version: debited_wallet.version,
       accepted_at: bet.accepted_at.toISOString(),
     };
 
@@ -428,15 +594,16 @@ const placeBetTransaction = async (
         },
         {
           aggregate_type: 'wallet',
-          aggregate_id: wallet.id,
+          aggregate_id: debited_wallet.id,
           event_type: 'wallet.balance.updated',
           socket_room: `user:${user_id}`,
           payload: {
-            wallet_id: wallet.id,
-            balance: updated_wallet.balance.toString(),
+            wallet_id: debited_wallet.id,
+            balance: debited_wallet.balance_after.toString(),
+            wallet_version: debited_wallet.version,
             reason: 'teen_patti_bet',
-            round_id: round.id,
-          },
+            round_id: barrier.id,
+          } satisfies WalletBalanceUpdatedPayload,
         },
       ],
     });
@@ -447,7 +614,9 @@ const placeBetTransaction = async (
 
 const placeBet = async (user_id: string, payload: PlaceBetBody) => {
   try {
-    return await placeBetTransaction(user_id, payload);
+    return await withWalletInitializationRetry(user_id, () =>
+      placeBetTransaction(user_id, payload),
+    );
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&

@@ -6,9 +6,11 @@ import {
   TeenPattiRuntimeStatus,
   WalletLedgerType,
 } from '@/generated/prisma/client';
+import { randomUUID } from 'node:crypto';
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import { ensureWallet } from '@/modules/wallet/wallet.services';
+import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
 import {
   TEEN_PATTI_GAME_CODE,
   TEEN_PATTI_RNG_ALGORITHM_VERSION,
@@ -173,7 +175,7 @@ const lockRound = async (round_id: string): Promise<void> => {
   if (locked_at) await cacheRound(round_id);
 };
 
-const generateResult = async (round_id: string): Promise<void> => {
+const generateResult = async (round_id: string): Promise<boolean> => {
   const round = await prisma.teenPattiRound.findUnique({
     where: { id: round_id },
     include: {
@@ -183,8 +185,8 @@ const generateResult = async (round_id: string): Promise<void> => {
       result: true,
     },
   });
-  if (!round || round.status !== TeenPattiRoundStatus.betting_locked || round.result) return;
-  if (!round.locked_at) return;
+  if (!round || round.status !== TeenPattiRoundStatus.betting_locked || round.result) return false;
+  if (!round.locked_at) return false;
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
     Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
   );
@@ -194,7 +196,7 @@ const generateResult = async (round_id: string): Promise<void> => {
     database_now.getTime() <
     round.locked_at.getTime() + round.config_version.lock_duration_ms
   ) {
-    return;
+    return false;
   }
 
   const options = round.config_version.options;
@@ -204,6 +206,10 @@ const generateResult = async (round_id: string): Promise<void> => {
   const winner = deal.hands[deal.winner_index];
   if (!winner) throw new Error('Teen Patti deal produced no winner');
   const generated_at = database_now;
+  const drawing_started_at = generated_at;
+  const result_reveal_at = new Date(
+    drawing_started_at.getTime() + round.config_version.drawing_duration_ms,
+  );
   const hands = deal.hands.map((hand) => ({
     option_id: hand.option_id,
     option_code: hand.option_code,
@@ -221,9 +227,9 @@ const generateResult = async (round_id: string): Promise<void> => {
     generated_at.toISOString(),
   ].join('|'));
 
-  await withSerializableRetry(async (tx) => {
+  const generated = await withSerializableRetry(async (tx) => {
     const current = await tx.teenPattiRound.findUnique({ where: { id: round.id }, include: { result: true } });
-    if (!current || current.status !== TeenPattiRoundStatus.betting_locked || current.result) return;
+    if (!current || current.status !== TeenPattiRoundStatus.betting_locked || current.result) return false;
 
     await tx.teenPattiRoundResult.create({
       data: {
@@ -240,18 +246,38 @@ const generateResult = async (round_id: string): Promise<void> => {
     });
     await tx.teenPattiRound.update({
       where: { id: round.id },
-      data: { status: TeenPattiRoundStatus.result_ready, result_generated_at: generated_at },
+      data: {
+        status: TeenPattiRoundStatus.drawing,
+        result_generated_at: generated_at,
+        drawing_started_at,
+        result_reveal_at,
+      },
     });
+    await tx.outboxEvent.create({
+      data: {
+        aggregate_type: 'teen_patti_round',
+        aggregate_id: round.id,
+        event_type: 'teen_patti.round.drawing',
+        socket_room: TEEN_PATTI_SOCKET_ROOM,
+        payload: {
+          round_id: round.id,
+          drawing_started_at: drawing_started_at.toISOString(),
+          result_reveal_at: result_reveal_at.toISOString(),
+        },
+      },
+    });
+    return true;
   });
-  await cacheRound(round_id);
+  if (generated) await cacheRound(round_id);
+  return generated;
 };
 
-const startDrawing = async (round_id: string): Promise<void> => {
+const startDrawing = async (round_id: string): Promise<boolean> => {
   const round = await prisma.teenPattiRound.findUnique({
     where: { id: round_id },
     include: { config_version: true },
   });
-  if (!round || round.status !== TeenPattiRoundStatus.result_ready) return;
+  if (!round || round.status !== TeenPattiRoundStatus.result_ready) return false;
 
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
     Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
@@ -290,27 +316,58 @@ const startDrawing = async (round_id: string): Promise<void> => {
   });
 
   if (transitioned) await cacheRound(round_id);
+  return transitioned;
 };
 
-const revealResult = async (round_id: string): Promise<void> => {
-  const round = await prisma.teenPattiRound.findUnique({
-    where: { id: round_id },
-    include: { result: { include: { winning_option: true } } },
-  });
-  if (!round || round.status !== TeenPattiRoundStatus.drawing || !round.result || !round.result_reveal_at) return;
-  const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
-    Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
-  );
-  const database_now = database_now_rows[0]?.database_now;
-  if (!database_now || database_now < round.result_reveal_at) return;
+const revealResult = async (round_id: string): Promise<string[] | null> => {
+  const reveal_context = await prisma.$queryRaw<Array<{
+    id: string;
+    result_reveal_at: Date;
+    database_now: Date;
+    hands: Prisma.JsonValue;
+    winning_option_id: string;
+    winning_option_code: string;
+    winning_option_name: string;
+    winning_option_image_url: string | null;
+    settlement_users: string[];
+  }>>(Prisma.sql`
+    SELECT
+      game_round.id,
+      game_round.result_reveal_at,
+      CURRENT_TIMESTAMP AS database_now,
+      result.hands,
+      winning_option.id AS winning_option_id,
+      winning_option.code AS winning_option_code,
+      winning_option.name AS winning_option_name,
+      winning_option.image_url AS winning_option_image_url,
+      ARRAY(
+        SELECT DISTINCT bet.user_id
+        FROM teen_patti_bets AS bet
+        WHERE bet.round_id = game_round.id
+        LIMIT ${SETTLEMENT_BATCH_USERS}
+      ) AS settlement_users
+    FROM teen_patti_rounds AS game_round
+    JOIN teen_patti_round_results AS result
+      ON result.round_id = game_round.id
+    JOIN teen_patti_option_versions AS winning_option
+      ON winning_option.id = result.winning_option_version_id
+    WHERE game_round.id = ${round_id}
+      AND game_round.status = 'drawing'::teen_patti_round_status
+      AND game_round.result_reveal_at IS NOT NULL
+  `);
+  const round = reveal_context[0];
+  if (!round || round.database_now < round.result_reveal_at) return null;
 
-  const revealed_at = database_now;
-  await withSerializableRetry(async (tx) => {
+  const revealed_at = round.database_now;
+  const revealed = await withSerializableRetry(async (tx) => {
     const updated = await tx.teenPattiRound.updateMany({
       where: { id: round.id, status: TeenPattiRoundStatus.drawing },
-      data: { status: TeenPattiRoundStatus.result_revealed },
+      data: {
+        status: TeenPattiRoundStatus.settling,
+        settlement_started_at: revealed_at,
+      },
     });
-    if (!updated.count) return;
+    if (!updated.count) return null;
     await tx.teenPattiRoundResult.update({ where: { round_id: round.id }, data: { revealed_at } });
     await tx.outboxEvent.create({
       data: {
@@ -319,30 +376,30 @@ const revealResult = async (round_id: string): Promise<void> => {
         payload: {
           round_id: round.id,
           winning_option: {
-            id: round.result!.winning_option.id,
-            code: round.result!.winning_option.code,
-            name: round.result!.winning_option.name,
-            image_url: round.result!.winning_option.image_url,
+            id: round.winning_option_id,
+            code: round.winning_option_code,
+            name: round.winning_option_name,
+            image_url: round.winning_option_image_url,
           },
-          hands: round.result!.hands,
+          hands: round.hands,
           revealed_at: revealed_at.toISOString(),
         },
       },
     });
+    return round.settlement_users;
   });
-  await cacheRound(round_id);
+  return revealed;
 };
 
-const startSettlement = async (round_id: string): Promise<void> => {
-  const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
-    Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
-  );
-  const database_now = database_now_rows[0]?.database_now;
-  if (!database_now) return;
-  await prisma.teenPattiRound.updateMany({
+const startSettlement = async (round_id: string): Promise<boolean> => {
+  const transitioned = await prisma.teenPattiRound.updateMany({
     where: { id: round_id, status: TeenPattiRoundStatus.result_revealed },
-    data: { status: TeenPattiRoundStatus.settling, settlement_started_at: database_now },
+    data: {
+      status: TeenPattiRoundStatus.settling,
+      settlement_started_at: new Date(),
+    },
   });
+  return transitioned.count === 1;
 };
 
 const pendingSettlementUsers = async (round_id: string): Promise<string[]> => {
@@ -358,37 +415,89 @@ const pendingSettlementUsers = async (round_id: string): Promise<string[]> => {
 
 const settleUser = async (round_id: string, user_id: string): Promise<void> => {
   await withSerializableRetry(async (tx) => {
-    const round = await tx.teenPattiRound.findUniqueOrThrow({
-      where: { id: round_id },
-      include: { result: true, config_version: { select: { rake_bps: true } } },
-    });
-    if (!round.result) throw new Error('Cannot settle a round without a result');
-
-    const bets = await tx.teenPattiBet.findMany({
-      where: { round_id, user_id, settlement: null },
-      orderBy: { created_at: 'asc' },
-    });
+    const bets = await tx.$queryRaw<Array<{
+      bet_id: string;
+      wallet_id: string;
+      option_version_id: string;
+      amount: bigint;
+      game_id: string;
+      result_id: string;
+      winning_option_version_id: string;
+      rake_bps: number;
+      pot: bigint;
+      total_winning_stake: bigint;
+    }>>(Prisma.sql`
+      WITH round_context AS (
+        SELECT
+          game_round.game_id,
+          result.id AS result_id,
+          result.winning_option_version_id,
+          config.rake_bps
+        FROM teen_patti_rounds AS game_round
+        JOIN teen_patti_round_results AS result
+          ON result.round_id = game_round.id
+        JOIN teen_patti_config_versions AS config
+          ON config.id = game_round.config_version_id
+        WHERE game_round.id = ${round_id}
+          AND game_round.status = 'settling'::teen_patti_round_status
+      ),
+      round_totals AS (
+        SELECT
+          COALESCE(SUM(bet.amount), 0)::bigint AS pot,
+          COALESCE(
+            SUM(bet.amount) FILTER (
+              WHERE bet.option_version_id = context.winning_option_version_id
+            ),
+            0
+          )::bigint AS total_winning_stake
+        FROM teen_patti_bets AS bet
+        CROSS JOIN round_context AS context
+        WHERE bet.round_id = ${round_id}
+      )
+      SELECT
+        bet.id AS bet_id,
+        bet.wallet_id,
+        bet.option_version_id,
+        bet.amount,
+        context.game_id,
+        context.result_id,
+        context.winning_option_version_id,
+        context.rake_bps,
+        totals.pot,
+        totals.total_winning_stake
+      FROM teen_patti_bets AS bet
+      CROSS JOIN round_context AS context
+      CROSS JOIN round_totals AS totals
+      WHERE bet.round_id = ${round_id}
+        AND bet.user_id = ${user_id}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM teen_patti_bet_settlements AS settlement
+          WHERE settlement.bet_id = bet.id
+        )
+      ORDER BY bet.created_at ASC
+    `);
     if (!bets.length) return;
 
-    const all_bets = await tx.teenPattiBet.findMany({
-      where: { round_id },
-      select: { option_version_id: true, amount: true },
-    });
-    const pot = all_bets.reduce((sum, bet) => sum + bet.amount, 0n);
-    const winning_stakes = all_bets
-      .filter((bet) => bet.option_version_id === round.result!.winning_option_version_id)
-      .map((bet) => bet.amount);
-    const split = splitPot(pot, round.config_version.rake_bps, winning_stakes);
-    const total_winning_stake = winning_stakes.reduce((sum, stake) => sum + stake, 0n);
+    const context = bets[0]!;
+    if (bets.some((bet) => bet.wallet_id !== context.wallet_id)) {
+      throw new Error('A player cannot settle one round across multiple wallets');
+    }
+    const split = splitPot(
+      context.pot,
+      context.rake_bps,
+      [context.total_winning_stake],
+    );
 
     let total_winning_stake_user = 0n;
     let total_payout = 0n;
     let winning_bet_count = 0;
 
     const settlement_rows = bets.map((bet) => {
-      const is_win = bet.option_version_id === round.result!.winning_option_version_id;
-      const payout = is_win && total_winning_stake > 0n
-        ? (split.distributable * bet.amount) / total_winning_stake
+      const is_win =
+        bet.option_version_id === context.winning_option_version_id;
+      const payout = is_win && context.total_winning_stake > 0n
+        ? (split.distributable * bet.amount) / context.total_winning_stake
         : 0n;
       if (is_win) {
         total_winning_stake_user += bet.amount;
@@ -396,59 +505,150 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
         winning_bet_count += 1;
       }
       return {
+        id: randomUUID(),
         round_id,
-        bet_id: bet.id,
-        result_id: round.result!.id,
+        bet_id: bet.bet_id,
+        result_id: context.result_id,
         outcome: is_win ? SettlementOutcome.win : SettlementOutcome.loss,
         payout_amount: payout,
       };
     });
 
-    await tx.teenPattiBetSettlement.createMany({ data: settlement_rows, skipDuplicates: true });
-
-    if (total_payout > 0n) {
-      const existing_payout = await tx.teenPattiUserPayout.findUnique({
-        where: { round_id_user_id: { round_id, user_id } },
+    if (total_payout <= 0n) {
+      await tx.teenPattiBetSettlement.createMany({
+        data: settlement_rows,
+        skipDuplicates: true,
       });
-      if (!existing_payout) {
-        const wallet = await ensureWallet(user_id, tx);
-        const updated_wallet = await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { balance: { increment: total_payout }, version: { increment: 1 } },
-        });
-        const ledger = await tx.walletLedger.create({
-          data: {
-            wallet_id: wallet.id,
-            user_id,
-            game_id: round.game_id,
-            type: WalletLedgerType.win_credit,
-            amount: total_payout,
-            balance_before: wallet.balance,
-            balance_after: updated_wallet.balance,
-            reference_type: 'teen_patti_round_payout',
-            reference_id: round_id,
-          },
-        });
-        await tx.teenPattiUserPayout.create({
-          data: {
-            round_id,
-            user_id,
-            wallet_id: wallet.id,
-            winning_bet_count,
-            total_winning_stake: total_winning_stake_user,
-            total_payout,
-            wallet_ledger_id: ledger.id,
-          },
-        });
-        await tx.outboxEvent.create({
-          data: {
-            aggregate_type: 'wallet', aggregate_id: wallet.id,
-            event_type: 'wallet.balance.updated', socket_room: `user:${user_id}`,
-            payload: { wallet_id: wallet.id, balance: updated_wallet.balance.toString(), reason: 'teen_patti_win', round_id, payout: total_payout.toString() },
-          },
-        });
-      }
+      return;
     }
+
+    const ledger_id = randomUUID();
+    const payout_id = randomUUID();
+    const settlement_values = Prisma.join(
+      settlement_rows.map((settlement) => Prisma.sql`(
+        ${settlement.id},
+        ${settlement.round_id},
+        ${settlement.bet_id},
+        ${settlement.result_id},
+        ${settlement.outcome}::settlement_outcome,
+        ${settlement.payout_amount}
+      )`),
+    );
+    const payout_mutation = await tx.$queryRaw<Array<{
+        id: string;
+        balance_before: bigint;
+        balance_after: bigint;
+        version: number;
+      }>>(Prisma.sql`
+      WITH inserted_settlements AS (
+        INSERT INTO teen_patti_bet_settlements (
+          id,
+          round_id,
+          bet_id,
+          result_id,
+          outcome,
+          payout_amount
+        )
+        VALUES ${settlement_values}
+        ON CONFLICT (bet_id) DO NOTHING
+        RETURNING bet_id
+      ),
+      updated_wallet AS (
+        UPDATE wallets AS wallet
+        SET
+          balance = wallet.balance + ${total_payout},
+          version = wallet.version + 1,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE wallet.id = ${context.wallet_id}
+          AND EXISTS (SELECT 1 FROM inserted_settlements)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM teen_patti_user_payouts AS existing_payout
+            WHERE existing_payout.round_id = ${round_id}
+              AND existing_payout.user_id = ${user_id}
+          )
+        RETURNING
+          wallet.id,
+          wallet.balance - ${total_payout} AS balance_before,
+          wallet.balance AS balance_after,
+          wallet.version
+      ),
+      inserted_ledger AS (
+        INSERT INTO wallet_ledger (
+          id,
+          wallet_id,
+          user_id,
+          game_id,
+          type,
+          amount,
+          balance_before,
+          balance_after,
+          reference_type,
+          reference_id
+        )
+        SELECT
+          ${ledger_id},
+          wallet.id,
+          ${user_id},
+          ${context.game_id},
+          ${WalletLedgerType.win_credit}::wallet_ledger_type,
+          ${total_payout},
+          wallet.balance_before,
+          wallet.balance_after,
+          'teen_patti_round_payout',
+          ${round_id}
+        FROM updated_wallet AS wallet
+        RETURNING id
+      ),
+      inserted_payout AS (
+        INSERT INTO teen_patti_user_payouts (
+          id,
+          round_id,
+          user_id,
+          wallet_id,
+          winning_bet_count,
+          total_winning_stake,
+          total_payout,
+          wallet_ledger_id
+        )
+        SELECT
+          ${payout_id},
+          ${round_id},
+          ${user_id},
+          ${context.wallet_id},
+          ${winning_bet_count},
+          ${total_winning_stake_user},
+          ${total_payout},
+          ledger.id
+        FROM inserted_ledger AS ledger
+        ON CONFLICT (round_id, user_id) DO NOTHING
+        RETURNING id
+      )
+      SELECT
+        wallet.id,
+        wallet.balance_before,
+        wallet.balance_after,
+        wallet.version
+      FROM updated_wallet AS wallet
+      WHERE EXISTS (SELECT 1 FROM inserted_payout)
+    `);
+    const updated_wallet = payout_mutation[0];
+    if (!updated_wallet) return;
+
+    await tx.outboxEvent.create({
+      data: {
+        aggregate_type: 'wallet', aggregate_id: updated_wallet.id,
+        event_type: 'wallet.balance.updated', socket_room: `user:${user_id}`,
+        payload: {
+          wallet_id: updated_wallet.id,
+          balance: updated_wallet.balance_after.toString(),
+          wallet_version: updated_wallet.version,
+          reason: 'teen_patti_win',
+          round_id,
+          payout: total_payout.toString(),
+        } satisfies WalletBalanceUpdatedPayload,
+      },
+    });
   });
 };
 
@@ -563,7 +763,14 @@ const refundUser = async (round_id: string, user_id: string): Promise<void> => {
       data: {
         aggregate_type: 'wallet', aggregate_id: wallet.id,
         event_type: 'wallet.balance.updated', socket_room: `user:${user_id}`,
-        payload: { wallet_id: wallet.id, balance: updated_wallet.balance.toString(), reason: 'teen_patti_refund', round_id, refund: total_bet_amount.toString() },
+        payload: {
+          wallet_id: wallet.id,
+          balance: updated_wallet.balance.toString(),
+          wallet_version: updated_wallet.version,
+          reason: 'teen_patti_refund',
+          round_id,
+          refund: total_bet_amount.toString(),
+        } satisfies WalletBalanceUpdatedPayload,
       },
     });
   });
@@ -594,10 +801,9 @@ const refundCancelledRound = async (round_id: string): Promise<void> => {
   await cacheRound(null);
 };
 
-const processCurrentRound = async (round_id: string): Promise<void> => {
-  const round = await prisma.teenPattiRound.findUnique({ where: { id: round_id } });
-  if (!round) return;
-
+const processCurrentRound = async (
+  round: { id: string; status: TeenPattiRoundStatus },
+): Promise<void> => {
   switch (round.status) {
     case TeenPattiRoundStatus.betting_open:
       await lockRound(round.id);
@@ -609,10 +815,20 @@ const processCurrentRound = async (round_id: string): Promise<void> => {
       await startDrawing(round.id);
       break;
     case TeenPattiRoundStatus.drawing:
-      await revealResult(round.id);
+      {
+        const settlement_users = await revealResult(round.id);
+        if (settlement_users) {
+          for (const user_id of settlement_users) {
+            await settleUser(round.id, user_id);
+          }
+          if (!settlement_users.length) await settleRoundBatch(round.id);
+        }
+      }
       break;
     case TeenPattiRoundStatus.result_revealed:
-      await startSettlement(round.id);
+      if (await startSettlement(round.id)) {
+        await settleRoundBatch(round.id);
+      }
       break;
     case TeenPattiRoundStatus.settling:
       await settleRoundBatch(round.id);
@@ -631,13 +847,19 @@ const processCurrentRound = async (round_id: string): Promise<void> => {
 export const runTeenPattiTick = async (): Promise<void> => {
   const game = await prisma.game.findUnique({
     where: { code: TEEN_PATTI_GAME_CODE },
-    include: { teen_patti_runtime_state: true },
+    include: {
+      teen_patti_runtime_state: {
+        include: {
+          current_round: { select: { id: true, status: true } },
+        },
+      },
+    },
   });
   if (!game?.teen_patti_runtime_state) return;
 
-  const current_round_id = game.teen_patti_runtime_state.current_round_id;
-  if (current_round_id) {
-    await processCurrentRound(current_round_id);
+  const current_round = game.teen_patti_runtime_state.current_round;
+  if (current_round) {
+    await processCurrentRound(current_round);
     return;
   }
 

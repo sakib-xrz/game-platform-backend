@@ -9,6 +9,7 @@ import {
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import { ensureWallet } from '@/modules/wallet/wallet.services';
+import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
 import {
   GREEDY_GAME_CODE,
   GREEDY_RNG_ALGORITHM_VERSION,
@@ -433,7 +434,14 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
           data: {
             aggregate_type: 'wallet', aggregate_id: wallet.id,
             event_type: 'wallet.balance.updated', socket_room: `user:${user_id}`,
-            payload: { wallet_id: wallet.id, balance: updated_wallet.balance.toString(), reason: 'greedy_win', round_id, payout: total_payout.toString() },
+            payload: {
+              wallet_id: wallet.id,
+              balance: updated_wallet.balance.toString(),
+              wallet_version: updated_wallet.version,
+              reason: 'greedy_win',
+              round_id,
+              payout: total_payout.toString(),
+            } satisfies WalletBalanceUpdatedPayload,
           },
         });
       }
@@ -552,7 +560,14 @@ const refundUser = async (round_id: string, user_id: string): Promise<void> => {
       data: {
         aggregate_type: 'wallet', aggregate_id: wallet.id,
         event_type: 'wallet.balance.updated', socket_room: `user:${user_id}`,
-        payload: { wallet_id: wallet.id, balance: updated_wallet.balance.toString(), reason: 'greedy_refund', round_id, refund: total_bet_amount.toString() },
+        payload: {
+          wallet_id: wallet.id,
+          balance: updated_wallet.balance.toString(),
+          wallet_version: updated_wallet.version,
+          reason: 'greedy_refund',
+          round_id,
+          refund: total_bet_amount.toString(),
+        } satisfies WalletBalanceUpdatedPayload,
       },
     });
   });

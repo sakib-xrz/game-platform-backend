@@ -183,6 +183,10 @@ const main = async (): Promise<void> => {
         lock_duration_ms: 1500,
         drawing_duration_ms: 5500,
         result_duration_ms: 5000,
+        min_bet: 10n,
+        max_single_bet: 10000n,
+        max_round_bet: 50000n,
+        rake_bps: 500,
         notes:
           'Technical baseline. Three decks, highest Teen Patti hand wins the pot minus rake.',
         chip_values: {

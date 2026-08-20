@@ -18,10 +18,12 @@ import { logger } from '@/utils/logger';
 
 const GREEDY_LEASE_KEY = 'game-worker:greedy';
 const TEEN_PATTI_LEASE_KEY = 'game-worker:teen-patti';
+const LEASE_REFRESH_MS = 2000;
 let stopping = false;
 let greedy_leader = false;
 let teen_patti_leader = false;
-let last_lease_refresh = 0;
+let lease_refresh_timer: NodeJS.Timeout | null = null;
+let lease_refresh_task: Promise<void> | null = null;
 let health_server: http.Server | undefined;
 
 const sleep = (ms: number): Promise<void> =>
@@ -45,6 +47,29 @@ const startHealthServer = (port: number): Promise<http.Server> =>
     });
   });
 
+const refreshLeadership = (): Promise<void> => {
+  if (lease_refresh_task) return lease_refresh_task;
+
+  const task = (async () => {
+    try {
+      [greedy_leader, teen_patti_leader] = await Promise.all([
+        acquireOrRenewLease(GREEDY_LEASE_KEY, config.worker_instance_id),
+        acquireOrRenewLease(TEEN_PATTI_LEASE_KEY, config.worker_instance_id),
+      ]);
+    } catch (error) {
+      greedy_leader = false;
+      teen_patti_leader = false;
+      logger.error('game_worker_lease_refresh_failed', { error });
+    }
+  })();
+
+  lease_refresh_task = task;
+  void task.finally(() => {
+    if (lease_refresh_task === task) lease_refresh_task = null;
+  });
+  return task;
+};
+
 const main = async (): Promise<void> => {
   await prisma.$connect();
   await connectRedis();
@@ -54,29 +79,41 @@ const main = async (): Promise<void> => {
   logger.info('game_worker_started', {
     instance_id: config.worker_instance_id,
   });
+  await refreshLeadership();
+  lease_refresh_timer = setInterval(
+    () => void refreshLeadership(),
+    LEASE_REFRESH_MS,
+  );
 
   while (!stopping) {
     try {
-      if (Date.now() - last_lease_refresh >= 2000) {
-        greedy_leader = await acquireOrRenewLease(
-          GREEDY_LEASE_KEY,
-          config.worker_instance_id,
-        );
-        teen_patti_leader = await acquireOrRenewLease(
-          TEEN_PATTI_LEASE_KEY,
-          config.worker_instance_id,
-        );
-        last_lease_refresh = Date.now();
-      }
+      // The games have independent runtimes and tables. Advancing them in
+      // parallel prevents a slow transition or settlement in one game from
+      // stretching every phase deadline in the other game.
+      const [greedy_tick, teen_patti_tick] = await Promise.allSettled([
+        greedy_leader ? runGreedyTick() : Promise.resolve(),
+        teen_patti_leader ? runTeenPattiTick() : Promise.resolve(),
+      ]);
 
-      if (greedy_leader) {
-        await runGreedyTick();
+      // Wait for both ticks to finish before the next loop so a fast failure
+      // cannot leave the other game running in the background. Demote only the
+      // failed game's leadership; an unrelated game keeps progressing.
+      if (greedy_tick.status === 'rejected') {
+        greedy_leader = false;
+        logger.error('game_worker_tick_failed', {
+          game_code: 'GREEDY',
+          error: greedy_tick.reason,
+        });
       }
-      if (teen_patti_leader) {
-        await runTeenPattiTick();
+      if (teen_patti_tick.status === 'rejected') {
+        teen_patti_leader = false;
+        logger.error('game_worker_tick_failed', {
+          game_code: 'TEEN_PATTI',
+          error: teen_patti_tick.reason,
+        });
       }
     } catch (error) {
-      logger.error('game_worker_tick_failed', { error });
+      logger.error('game_worker_loop_failed', { error });
       greedy_leader = false;
       teen_patti_leader = false;
     }
@@ -86,6 +123,10 @@ const main = async (): Promise<void> => {
 };
 
 const cleanup = async (): Promise<void> => {
+  if (lease_refresh_timer) clearInterval(lease_refresh_timer);
+  lease_refresh_timer = null;
+  if (lease_refresh_task) await lease_refresh_task;
+
   try {
     if (greedy_leader) {
       await releaseLease(GREEDY_LEASE_KEY, config.worker_instance_id);

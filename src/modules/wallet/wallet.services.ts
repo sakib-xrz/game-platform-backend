@@ -1,13 +1,22 @@
 import httpStatus from 'http-status';
+import { randomUUID } from 'node:crypto';
 import { AdminApprovalStatus, AuditActorType, Prisma, WalletLedgerType } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
 import { getPagination } from '@/utils/pagination';
 import type { AdminAdjustWalletBody } from './wallet.validation';
+import type { WalletBalanceUpdatedPayload } from './wallet.types';
 import type { AdminAuditContext } from '@/modules/admin/admin.services';
 import { createPendingApproval, markApprovalApplied, verifyApprovalPayloadHash } from '@/modules/admin/admin-approval.services';
 
 const DEFAULT_CURRENCY_CODE = 'COIN';
+
+export class WalletInitializationRequiredError extends Error {
+  constructor() {
+    super('Player wallet must be initialized before retrying the operation');
+    this.name = 'WalletInitializationRequiredError';
+  }
+}
 
 const getCurrency = async (tx: Prisma.TransactionClient = prisma) => {
   const currency = await tx.currency.findUnique({
@@ -23,26 +32,114 @@ export const ensureWallet = async (
   user_id: string,
   tx: Prisma.TransactionClient = prisma,
 ) => {
-  const currency = await getCurrency(tx);
-  const where = {
-    user_id_currency_id: { user_id, currency_id: currency.id },
-  };
   const include = { currency: true } as const;
 
-  const existing = await tx.wallet.findUnique({ where, include });
+  // Existing players are the overwhelmingly common path. Resolve the wallet
+  // and its active currency in one query instead of first looking the currency
+  // up and then looking the wallet up. This is especially important for every
+  // game snapshot, which is polled throughout a round.
+  const existing = await tx.wallet.findFirst({
+    where: {
+      user_id,
+      currency: { code: DEFAULT_CURRENCY_CODE, is_active: true },
+    },
+    include,
+  });
   if (existing) return existing;
 
-  // Concurrent first-time creates race Prisma upsert; skipDuplicates is ON CONFLICT DO NOTHING.
-  await tx.wallet.createMany({
-    data: [{ user_id, currency_id: currency.id }],
-    skipDuplicates: true,
-  });
-
-  const wallet = await tx.wallet.findUnique({ where, include });
-  if (!wallet) {
-    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Wallet could not be initialized');
+  // The cold path is one atomic statement. A Prisma currency lookup + create +
+  // relation fetch adds three remote-database round trips to a player's first
+  // snapshot, and a normal upsert can race concurrent first requests.
+  const initialized = await tx.$queryRaw<Array<{
+    wallet_id: string;
+    user_id: string;
+    currency_id: string;
+    balance: bigint;
+    version: number;
+    wallet_created_at: Date;
+    wallet_updated_at: Date;
+    currency_code: string;
+    currency_name: string;
+    currency_symbol: string | null;
+    currency_is_active: boolean;
+    currency_created_at: Date;
+    currency_updated_at: Date;
+  }>>(Prisma.sql`
+    WITH initialized_wallet AS (
+      INSERT INTO wallets (id, user_id, currency_id, updated_at)
+      SELECT
+        ${randomUUID()},
+        ${user_id},
+        currency.id,
+        CURRENT_TIMESTAMP
+      FROM currencies AS currency
+      WHERE currency.code = ${DEFAULT_CURRENCY_CODE}
+        AND currency.is_active = TRUE
+      ON CONFLICT (user_id, currency_id)
+      DO UPDATE SET user_id = EXCLUDED.user_id
+      RETURNING *
+    )
+    SELECT
+      wallet.id AS wallet_id,
+      wallet.user_id,
+      wallet.currency_id,
+      wallet.balance,
+      wallet.version,
+      wallet.created_at AS wallet_created_at,
+      wallet.updated_at AS wallet_updated_at,
+      currency.code AS currency_code,
+      currency.name AS currency_name,
+      currency.symbol AS currency_symbol,
+      currency.is_active AS currency_is_active,
+      currency.created_at AS currency_created_at,
+      currency.updated_at AS currency_updated_at
+    FROM initialized_wallet AS wallet
+    JOIN currencies AS currency ON currency.id = wallet.currency_id
+  `);
+  const row = initialized[0];
+  if (!row) {
+    throw new AppError(
+      httpStatus.SERVICE_UNAVAILABLE,
+      'Game currency is unavailable',
+    );
   }
-  return wallet;
+
+  return {
+    id: row.wallet_id,
+    user_id: row.user_id,
+    currency_id: row.currency_id,
+    balance: row.balance,
+    version: row.version,
+    created_at: row.wallet_created_at,
+    updated_at: row.wallet_updated_at,
+    currency: {
+      id: row.currency_id,
+      code: row.currency_code,
+      name: row.currency_name,
+      symbol: row.currency_symbol,
+      is_active: row.currency_is_active,
+      created_at: row.currency_created_at,
+      updated_at: row.currency_updated_at,
+    },
+  };
+};
+
+export const withWalletInitializationRetry = async <T>(
+  user_id: string,
+  operation: () => Promise<T>,
+  initialize: (target_user_id: string) => Promise<unknown> = ensureWallet,
+): Promise<T> => {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!(error instanceof WalletInitializationRequiredError)) throw error;
+  }
+
+  // Initialization must commit outside the failed bet transaction. Retrying
+  // exactly once prevents a missing-wallet rollback loop while keeping the
+  // existing-wallet path free of an additional preflight query.
+  await initialize(user_id);
+  return operation();
 };
 
 const getMyWallet = async (user_id: string) => ensureWallet(user_id);
@@ -147,8 +244,9 @@ const adminAdjustWallet = async (payload: AdminAdjustWalletBody, context: AdminA
         payload: {
           wallet_id: wallet.id,
           balance: balance_after.toString(),
+          wallet_version: updated.version,
           reason: 'admin_adjustment',
-        },
+        } satisfies WalletBalanceUpdatedPayload,
       },
     });
 
