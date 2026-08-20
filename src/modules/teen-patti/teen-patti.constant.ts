@@ -1,0 +1,8 @@
+export const TEEN_PATTI_GAME_CODE = 'TEEN_PATTI';
+export const TEEN_PATTI_CURRENCY_CODE = 'COIN';
+export const TEEN_PATTI_SOCKET_ROOM = 'game:teen-patti';
+export const TEEN_PATTI_RNG_ALGORITHM_VERSION = 'teen-patti-deal-v1';
+export const TEEN_PATTI_IDEMPOTENCY_SCOPE = 'teen_patti.place_bet';
+export const TEEN_PATTI_MAX_DEAL_ATTEMPTS = 10;
+export const TEEN_PATTI_REQUIRED_DECKS = 3;
+export const TEEN_PATTI_RAKE_BPS_MAX = 2000;

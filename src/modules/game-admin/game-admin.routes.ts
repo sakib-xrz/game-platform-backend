@@ -5,8 +5,10 @@ import { requireAdminPermission } from '@/middlewares/admin-permission';
 import { requireAdminIdempotency } from '@/middlewares/admin-idempotency';
 import validateRequest from '@/middlewares/validate-request';
 import GameAdminController from './game-admin.controller';
-import { approvalParamSchema, cancelRoundSchema, configParamSchema, createGreedyConfigSchema } from './game-admin.validation';
+import TeenPattiAdminController from './teen-patti-admin.controller';
+import { approvalParamSchema, cancelRoundSchema, configParamSchema, createGreedyConfigSchema, createTeenPattiConfigSchema } from './game-admin.validation';
 import GreedyAdminOpsRoutes from './greedy-admin-ops.routes';
+import TeenPattiAdminOpsRoutes from './teen-patti-admin-ops.routes';
 
 export const GameAdminRoutes = express.Router();
 GameAdminRoutes.use(adminAuth, adminPasswordGate);
@@ -21,3 +23,15 @@ GameAdminRoutes.post('/greedy/resume', requireAdminPermission('game.runtime.cont
 GameAdminRoutes.post('/greedy/pause', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('greedy.pause'), GameAdminController.pause);
 GameAdminRoutes.post('/greedy/cancel-current-round', requireAdminPermission('round.cancel'), requireAdminIdempotency('greedy.round.cancel'), validateRequest(cancelRoundSchema), GameAdminController.cancelCurrentRound);
 GameAdminRoutes.use('/greedy', GreedyAdminOpsRoutes);
+
+GameAdminRoutes.get('/teen-patti/runtime', requireAdminPermission('game.read'), TeenPattiAdminController.getRuntime);
+GameAdminRoutes.get('/teen-patti/config-versions', requireAdminPermission('game.read'), TeenPattiAdminController.listConfigs);
+GameAdminRoutes.post('/teen-patti/config-versions/validate', requireAdminPermission('game.config.draft.create'), validateRequest(createTeenPattiConfigSchema), TeenPattiAdminController.validateConfig);
+GameAdminRoutes.post('/teen-patti/config-versions', requireAdminPermission('game.config.draft.create'), requireAdminIdempotency('teen_patti.config.create'), validateRequest(createTeenPattiConfigSchema), TeenPattiAdminController.createConfig);
+GameAdminRoutes.post('/teen-patti/config-versions/:config_id/publish', requireAdminPermission('game.config.publish'), requireAdminIdempotency('teen_patti.config.publish'), validateRequest(configParamSchema), TeenPattiAdminController.publishConfig);
+GameAdminRoutes.post('/teen-patti/config-versions/:config_id/publish-request', requireAdminPermission('game.config.publish'), requireAdminIdempotency('teen_patti.config.publish.request'), validateRequest(configParamSchema), TeenPattiAdminController.requestPublishConfig);
+GameAdminRoutes.post('/teen-patti/config-versions/publish-approved', requireAdminPermission('game.config.publish'), requireAdminIdempotency('teen_patti.config.publish.apply'), validateRequest(approvalParamSchema), TeenPattiAdminController.publishApprovedConfig);
+GameAdminRoutes.post('/teen-patti/resume', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('teen_patti.resume'), TeenPattiAdminController.resume);
+GameAdminRoutes.post('/teen-patti/pause', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('teen_patti.pause'), TeenPattiAdminController.pause);
+GameAdminRoutes.post('/teen-patti/cancel-current-round', requireAdminPermission('round.cancel'), requireAdminIdempotency('teen_patti.round.cancel'), validateRequest(cancelRoundSchema), TeenPattiAdminController.cancelCurrentRound);
+GameAdminRoutes.use('/teen-patti', TeenPattiAdminOpsRoutes);

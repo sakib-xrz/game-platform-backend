@@ -4,7 +4,7 @@ import { canonicalJson } from '@/utils/hash';
 
 export type OpsWebhookPayload = {
   event_id: string;
-  source: 'greedy-ops';
+  source: 'greedy-ops' | 'teen-patti-ops';
   code: string;
   severity: 'warning' | 'critical';
   message: string;

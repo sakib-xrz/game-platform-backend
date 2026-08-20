@@ -1,6 +1,6 @@
 # Greedy Platform Backend
 
-Production-oriented backend foundation for a multi-game platform. Greedy is the first game module. The code follows the supplied Express backend pattern: module routes/controllers/services/validation, shared middleware/utilities, Prisma, and `/api/v1` routing.
+Production-oriented backend foundation for a multi-game platform. **Greedy** is the first game (8 weighted symbols). **Teen Patti** is the second (three card decks, highest hand wins the pot minus rake). The code follows the supplied Express backend pattern: module routes/controllers/services/validation, shared middleware/utilities, Prisma, and `/api/v1` routing.
 
 ## Locked technical choices
 
@@ -12,7 +12,7 @@ Production-oriented backend foundation for a multi-game platform. Greedy is the 
 - Virtual-currency amounts use PostgreSQL `BIGINT` / Prisma `BigInt`
 - PostgreSQL is authoritative; Redis is rebuildable realtime infrastructure
 - Critical client writes use REST; Socket.IO is realtime delivery
-- API process and authoritative Greedy worker are separate runtime processes
+- API process and authoritative game worker are separate runtime processes
 - Transactional outbox for committed realtime events
 - Serializable retry for wallet/bet/settlement critical sections
 - Versioned Greedy configuration so a running round never changes mid-flight
@@ -23,7 +23,7 @@ Production-oriented backend foundation for a multi-game platform. Greedy is the 
 src/
 ├── app.ts
 ├── server.ts                 # HTTP + Socket.IO + outbox publisher
-├── worker.ts                 # authoritative Greedy lifecycle process
+├── worker.ts                 # authoritative Greedy + Teen Patti lifecycle process
 ├── config/
 ├── infrastructure/
 │   ├── redis/
@@ -31,12 +31,14 @@ src/
 ├── middlewares/
 ├── modules/
 │   ├── greedy/
+│   ├── teen-patti/
 │   ├── wallet/
 │   └── game-admin/
 ├── routes/
 ├── utils/
 └── workers/
     ├── greedy-round.worker.ts
+    ├── teen-patti-round.worker.ts
     ├── outbox.worker.ts
     └── worker-lease.ts
 ```
@@ -84,7 +86,7 @@ Run the authoritative game worker in another terminal:
 npm run dev:worker
 ```
 
-The seed creates the `COIN` currency, `GREEDY` game, a published version-1 Greedy config, and a stopped runtime. Start rounds with the admin resume endpoint.
+The seed creates the `COIN` currency, `GREEDY` and `TEEN_PATTI` games, published version-1 configs, and **stopped** runtimes. Resume each game independently with its admin resume endpoint. One `npm run dev:worker` process holds both `game-worker:greedy` and `game-worker:teen-patti` leases.
 
 ## Identity integration
 
@@ -180,6 +182,8 @@ GET  /admin/games/greedy/rounds
 GET  /admin/games/greedy/users/:user_id
 GET  /admin/games/greedy/audit-logs
 GET  /admin/games/greedy/assets
+GET  /admin/games/teen-patti/overview
+POST /admin/games/teen-patti/resume
 ```
 
 Greedy result evidence is append-only. The winner, algorithm, entropy digest,
@@ -206,6 +210,11 @@ Base URL: `/api/v1`
 | GET | `/games/greedy/my-bets?page=1&limit=20` | Player bet history |
 | GET | `/games/greedy/rounds?page=1&limit=20` | Public result history |
 | GET | `/games/greedy/rounds/:round_id` | Public round detail; result hidden until reveal |
+| GET | `/games/teen-patti/snapshot` | Teen Patti snapshot (3 decks, rake, hidden hands until reveal) |
+| POST | `/games/teen-patti/bets` | Place an idempotent bet on one deck |
+| GET | `/games/teen-patti/my-bets?page=1&limit=20` | Teen Patti bet history |
+| GET | `/games/teen-patti/rounds?page=1&limit=20` | Public Teen Patti result history |
+| GET | `/games/teen-patti/rounds/:round_id` | Public round detail; cards hidden until reveal |
 | GET | `/wallets/me` | Shared platform wallet |
 | GET | `/wallets/me/transactions?page=1&limit=20` | Immutable wallet ledger history |
 
@@ -253,7 +262,7 @@ Content-Type: application/json
 
 ## Socket events
 
-Every connection joins `game:greedy`. Authenticated identity integration should additionally join `user:<user_id>`.
+Every connection joins `game:greedy` and `game:teen-patti`. Authenticated identity integration should additionally join `user:<user_id>`.
 
 Server events currently emitted through the transactional outbox:
 
@@ -271,6 +280,16 @@ greedy.round.closed
 greedy.round.cancelled
 greedy.round.refunded
 greedy.bet.accepted
+
+teen_patti.round.opened
+teen_patti.round.locked
+teen_patti.round.drawing
+teen_patti.round.result
+teen_patti.round.settled
+teen_patti.round.closed
+teen_patti.round.cancelled
+teen_patti.round.refunded
+teen_patti.bet.accepted
 
 wallet.balance.updated
 ```
@@ -292,6 +311,10 @@ and inverse-style weights:
 ```
 
 This produces approximately the same expected return per option (~90.8%) under the stake-inclusive payout convention. It is a technical baseline, not a claim about IMO/Likee/BIGO proprietary game math. Before a real-money/redeemable-currency launch, product/legal/game-economy review is required.
+
+## Teen Patti rules
+
+Three decks (`DECK_A` / `DECK_B` / `DECK_C`). Bet on any 1–3 during `betting_open`. After lock, one 52-card deck is shuffled with crypto RNG and 9 cards are dealt (3 per deck). Hands use Indian Teen Patti ranking (trail, pure sequence, sequence, color, pair, high card; A-2-3 is the highest sequence). Ties for highest are redealt (cap 10). The unique highest deck wins. Pot = all stakes; house takes `rake_bps` (seed 500 = 5%); remainder is split among winning-deck stakes with integer leftover kept by the house. If nobody bet the winner, the house keeps the pot.
 
 ## Inputs still needed later
 

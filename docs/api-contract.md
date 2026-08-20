@@ -44,6 +44,24 @@ Public revealed-result history.
 
 Round details. Result is withheld until public reveal.
 
+## Teen Patti player/game
+
+Global rounds with three decks. Players may bet on one, two, or all three. After lock the server deals 3×3 cards; the highest Teen Patti hand wins. Winning-deck bets split the round pot minus `rake_bps`. Cards and winner stay hidden until reveal. Integer leftover from the split stays with the house. If nobody bet the winner, the pot stays with the house.
+
+### GET `/games/teen-patti/snapshot`
+
+Same snapshot shape as Greedy, plus `rake_bps` and (after reveal) `result.hands`.
+
+### POST `/games/teen-patti/bets`
+
+Same body as Greedy (`round_id`, `option_id` of a deck, `amount`, `client_request_id`).
+
+### GET `/games/teen-patti/my-bets?page=1&limit=20`
+
+### GET `/games/teen-patti/rounds?page=1&limit=20`
+
+### GET `/games/teen-patti/rounds/:round_id`
+
 ## Wallet
 
 ### GET `/wallets/me`
@@ -110,6 +128,10 @@ Body:
 Allowed only before public reveal. The worker performs exactly-once aggregate refunds.
 
 Cancellation exposure at or above the policy threshold returns `202 pending_approval`. The requester applies the approved request through the same endpoint with `approval_id`; current round, cancellable status, reason, exposure, and payload hash are rechecked before mutation.
+
+### Teen Patti admin
+
+Same runtime/config/ops surface under `/admin/games/teen-patti/...`. Config create requires exactly 3 decks and `rake_bps` (0–2000). Approvals use `teen_patti.config.publish` and `teen_patti.round.cancel`.
 
 ### POST `/admin/wallets/adjust`
 
