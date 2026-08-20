@@ -148,6 +148,14 @@ const getSnapshot = async (user_id: string) => {
       })
     : [];
 
+  const option_pot_totals = current_round
+    ? await prisma.teenPattiBet.groupBy({
+        by: ['option_version_id'],
+        where: { round_id: current_round.id },
+        _sum: { amount: true },
+      })
+    : [];
+
   const history = await prisma.teenPattiRound.findMany({
     where: {
       game_id: game.id,
@@ -190,6 +198,10 @@ const getSnapshot = async (user_id: string) => {
           options: current_round.config_version.options,
           chip_values: current_round.config_version.chip_values,
           rake_bps: current_round.config_version.rake_bps,
+          option_pot_totals: option_pot_totals.map((row) => ({
+            option_id: row.option_version_id,
+            total_amount: (row._sum.amount ?? 0n).toString(),
+          })),
           result: result_is_public ? current_round.result : null,
         }
       : null,
