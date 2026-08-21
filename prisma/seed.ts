@@ -6,6 +6,7 @@ import {
   ConfigVersionStatus,
   GameStatus,
   GreedyRuntimeStatus,
+  GreedyClassicRuntimeStatus,
   Lucky77RuntimeStatus,
   PrismaClient,
   TeenPattiRuntimeStatus,
@@ -160,6 +161,142 @@ const main = async (): Promise<void> => {
     },
     update: {
       active_config_version_id: greedy_config.id,
+    },
+  });
+
+
+  const greedy_classic_game = await prisma.game.upsert({
+    where: { code: 'GREEDY_CLASSIC' },
+    create: { code: 'GREEDY_CLASSIC', name: 'Greedy Classic', status: GameStatus.active },
+    update: {},
+  });
+
+  let greedy_classic_config = await prisma.greedyClassicConfigVersion.findFirst({
+    where: { game_id: greedy_classic_game.id, version: 1 },
+    include: { options: true },
+  });
+
+  if (!greedy_classic_config) {
+    greedy_classic_config = await prisma.greedyClassicConfigVersion.create({
+      data: {
+        game_id: greedy_classic_game.id,
+        version: 1,
+        status: ConfigVersionStatus.draft,
+        betting_duration_ms: 15000,
+        lock_duration_ms: 1000,
+        drawing_duration_ms: 4000,
+        result_duration_ms: 3000,
+        min_bet: 10n,
+        max_single_bet: 10000n,
+        max_round_bet: 50000n,
+        notes:
+          'Technical baseline. Replace names/images/economy before public launch.',
+        chip_values: {
+          create: [
+            { amount: 10n, display_order: 1 },
+            { amount: 50n, display_order: 2 },
+            { amount: 100n, display_order: 3 },
+            { amount: 500n, display_order: 4 },
+            { amount: 1000n, display_order: 5 },
+            { amount: 5000n, display_order: 6 },
+          ],
+        },
+        options: {
+          create: [
+            {
+              code: 'FALCON',
+              name: 'Falcon',
+              display_order: 1,
+              payout_numerator: 4n,
+              payout_denominator: 1n,
+              probability_weight: 210n,
+            },
+            {
+              code: 'TIGER',
+              name: 'Tiger',
+              display_order: 2,
+              payout_numerator: 5n,
+              payout_denominator: 1n,
+              probability_weight: 168n,
+            },
+            {
+              code: 'PANDA',
+              name: 'Panda',
+              display_order: 3,
+              payout_numerator: 6n,
+              payout_denominator: 1n,
+              probability_weight: 140n,
+            },
+            {
+              code: 'LION',
+              name: 'Lion',
+              display_order: 4,
+              payout_numerator: 7n,
+              payout_denominator: 1n,
+              probability_weight: 120n,
+            },
+            {
+              code: 'SHARK',
+              name: 'Shark',
+              display_order: 5,
+              payout_numerator: 8n,
+              payout_denominator: 1n,
+              probability_weight: 105n,
+            },
+            {
+              code: 'DRAGON',
+              name: 'Dragon',
+              display_order: 6,
+              payout_numerator: 10n,
+              payout_denominator: 1n,
+              probability_weight: 84n,
+            },
+            {
+              code: 'CROWN',
+              name: 'Crown',
+              display_order: 7,
+              payout_numerator: 15n,
+              payout_denominator: 1n,
+              probability_weight: 56n,
+            },
+            {
+              code: 'DIAMOND',
+              name: 'Diamond',
+              display_order: 8,
+              payout_numerator: 20n,
+              payout_denominator: 1n,
+              probability_weight: 42n,
+            },
+          ],
+        },
+      },
+      include: { options: true },
+    });
+
+    greedy_classic_config = await prisma.greedyClassicConfigVersion.update({
+      where: { id: greedy_classic_config.id },
+      data: { status: ConfigVersionStatus.review_pending },
+      include: { options: true },
+    });
+    greedy_classic_config = await prisma.greedyClassicConfigVersion.update({
+      where: { id: greedy_classic_config.id },
+      data: {
+        status: ConfigVersionStatus.published,
+        published_at: new Date(),
+      },
+      include: { options: true },
+    });
+  }
+
+  await prisma.greedyClassicRuntimeState.upsert({
+    where: { game_id: greedy_classic_game.id },
+    create: {
+      game_id: greedy_classic_game.id,
+      active_config_version_id: greedy_classic_config.id,
+      status: GreedyClassicRuntimeStatus.stopped,
+    },
+    update: {
+      active_config_version_id: greedy_classic_config.id,
     },
   });
 
@@ -394,9 +531,11 @@ const main = async (): Promise<void> => {
     game: game.code,
     teen_patti_game: teen_patti_game.code,
     lucky_77_game: lucky_77_game.code,
+    greedy_classic_game: greedy_classic_game.code,
     config_version: greedy_config.version,
     teen_patti_config_version: teen_patti_config.version,
     lucky_77_config_version: lucky_77_config.version,
+    greedy_classic_config_version: greedy_classic_config.version,
     runtime_status: 'stopped',
     admin: admin.email,
   });

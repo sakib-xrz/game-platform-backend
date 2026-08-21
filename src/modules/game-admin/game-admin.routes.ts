@@ -7,10 +7,12 @@ import validateRequest from '@/middlewares/validate-request';
 import GameAdminController from './game-admin.controller';
 import TeenPattiAdminController from './teen-patti-admin.controller';
 import Lucky77AdminController from './lucky-77-admin.controller';
-import { approvalParamSchema, cancelRoundSchema, configParamSchema, createGreedyConfigSchema, createLucky77ConfigSchema, createTeenPattiConfigSchema } from './game-admin.validation';
+import GreedyClassicAdminController from './greedy-classic-admin.controller';
+import { approvalParamSchema, cancelRoundSchema, configParamSchema, createGreedyConfigSchema, createGreedyClassicConfigSchema, createLucky77ConfigSchema, createTeenPattiConfigSchema } from './game-admin.validation';
 import GreedyAdminOpsRoutes from './greedy-admin-ops.routes';
 import TeenPattiAdminOpsRoutes from './teen-patti-admin-ops.routes';
 import Lucky77AdminOpsRoutes from './lucky-77-admin-ops.routes';
+import GreedyClassicAdminOpsRoutes from './greedy-classic-admin-ops.routes';
 
 export const GameAdminRoutes = express.Router();
 GameAdminRoutes.use(adminAuth, adminPasswordGate);
@@ -49,3 +51,15 @@ GameAdminRoutes.post('/lucky-77/resume', requireAdminPermission('game.runtime.co
 GameAdminRoutes.post('/lucky-77/pause', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('lucky_77.pause'), Lucky77AdminController.pause);
 GameAdminRoutes.post('/lucky-77/cancel-current-round', requireAdminPermission('round.cancel'), requireAdminIdempotency('lucky_77.round.cancel'), validateRequest(cancelRoundSchema), Lucky77AdminController.cancelCurrentRound);
 GameAdminRoutes.use('/lucky-77', Lucky77AdminOpsRoutes);
+
+GameAdminRoutes.get('/greedy-classic/runtime', requireAdminPermission('game.read'), GreedyClassicAdminController.getRuntime);
+GameAdminRoutes.get('/greedy-classic/config-versions', requireAdminPermission('game.read'), GreedyClassicAdminController.listConfigs);
+GameAdminRoutes.post('/greedy-classic/config-versions/validate', requireAdminPermission('game.config.draft.create'), validateRequest(createGreedyClassicConfigSchema), GreedyClassicAdminController.validateConfig);
+GameAdminRoutes.post('/greedy-classic/config-versions', requireAdminPermission('game.config.draft.create'), requireAdminIdempotency('greedy_classic.config.create'), validateRequest(createGreedyClassicConfigSchema), GreedyClassicAdminController.createConfig);
+GameAdminRoutes.post('/greedy-classic/config-versions/:config_id/publish', requireAdminPermission('game.config.publish'), requireAdminIdempotency('greedy_classic.config.publish'), validateRequest(configParamSchema), GreedyClassicAdminController.publishConfig);
+GameAdminRoutes.post('/greedy-classic/config-versions/:config_id/publish-request', requireAdminPermission('game.config.publish'), requireAdminIdempotency('greedy_classic.config.publish.request'), validateRequest(configParamSchema), GreedyClassicAdminController.requestPublishConfig);
+GameAdminRoutes.post('/greedy-classic/config-versions/publish-approved', requireAdminPermission('game.config.publish'), requireAdminIdempotency('greedy_classic.config.publish.apply'), validateRequest(approvalParamSchema), GreedyClassicAdminController.publishApprovedConfig);
+GameAdminRoutes.post('/greedy-classic/resume', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('greedy_classic.resume'), GreedyClassicAdminController.resume);
+GameAdminRoutes.post('/greedy-classic/pause', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('greedy_classic.pause'), GreedyClassicAdminController.pause);
+GameAdminRoutes.post('/greedy-classic/cancel-current-round', requireAdminPermission('round.cancel'), requireAdminIdempotency('greedy_classic.round.cancel'), validateRequest(cancelRoundSchema), GreedyClassicAdminController.cancelCurrentRound);
+GameAdminRoutes.use('/greedy-classic', GreedyClassicAdminOpsRoutes);

@@ -7,6 +7,7 @@ The Socket layer is notification/recovery acceleration, not the authoritative wr
 - `game:greedy` — all Greedy clients
 - `game:teen-patti` — all Teen Patti clients
 - `game:lucky-77` — all Lucky 77 clients
+- `game:greedy-classic` — all Greedy Classic clients
 - `user:<user_id>` — user-private wallet/bet notifications after real auth is integrated
 
 ## Server -> client events
@@ -77,11 +78,11 @@ Private `user:<user_id>` notification mirroring the accepted REST bet response.
 
 ### `wallet.balance.updated`
 
-Private user event. `reason` is currently one of `greedy_bet`, `greedy_win`, `greedy_refund`, `teen_patti_bet`, `teen_patti_win`, `teen_patti_refund`, `lucky_77_bet`, `lucky_77_win`, `lucky_77_refund`, or `admin_adjustment`.
+Private user event. `reason` is currently one of `greedy_bet`, `greedy_win`, `greedy_refund`, `teen_patti_bet`, `teen_patti_win`, `teen_patti_refund`, `lucky_77_bet`, `lucky_77_win`, `lucky_77_refund`, `greedy_classic_bet`, `greedy_classic_win`, `greedy_classic_refund`, or `admin_adjustment`.
 
 ## Teen Patti events
 
-New connections join `game:greedy`, `game:teen-patti`, and `game:lucky-77`. Clients should ignore events they do not handle.
+New connections join `game:greedy`, `game:teen-patti`, `game:lucky-77`, and `game:greedy-classic`. Clients should ignore events they do not handle.
 
 ### `teen_patti.round.opened`
 
@@ -135,6 +136,34 @@ Same round-lifecycle meaning as Greedy.
 
 Private `user:<user_id>` notification mirroring the accepted REST bet.
 
+## Greedy Classic events
+
+Same round lifecycle as Greedy under the `greedy_classic.*` event namespace. New connections also join `game:greedy-classic`.
+
+### `greedy_classic.round.opened`
+
+Contains `round_id`, `round_number`, server timestamps, and public option data. Probability weights are intentionally not sent.
+
+### `greedy_classic.round.locked`
+
+Contains `round_id` and `locked_at`.
+
+### `greedy_classic.round.drawing`
+
+Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. The winning result is intentionally absent.
+
+### `greedy_classic.round.result`
+
+Emitted only at reveal time. Contains the winning public option and `revealed_at`.
+
+### `greedy_classic.round.settled` / `closed` / `cancelled` / `refunded`
+
+Same round-lifecycle meaning as Greedy.
+
+### `greedy_classic.bet.accepted`
+
+Private `user:<user_id>` notification mirroring the accepted REST bet.
+
 ## Client recovery rule
 
 A Socket reconnect is not enough to establish authoritative state. On initial load, WebView resume, browser visibility resume, or unsuccessful Socket state recovery, fetch:
@@ -153,6 +182,12 @@ or, for Lucky 77:
 
 ```text
 GET /api/v1/games/lucky-77/snapshot
+```
+
+or, for Greedy Classic:
+
+```text
+GET /api/v1/games/greedy-classic/snapshot
 ```
 
 Then continue listening to Socket events. Every durable outbox event includes `event_id`; clients should de-duplicate repeated IDs.

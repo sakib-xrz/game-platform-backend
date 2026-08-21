@@ -73,3 +73,4 @@ const createBetRateLimiter = (game_slug: string) =>
 export const betRateLimiter = createBetRateLimiter('greedy');
 export const teenPattiBetRateLimiter = createBetRateLimiter('teen-patti');
 export const lucky77BetRateLimiter = createBetRateLimiter('lucky-77');
+export const greedyClassicBetRateLimiter = createBetRateLimiter('greedy-classic');

@@ -25,6 +25,7 @@ export const initializeSocket = (http_server: HttpServer): Server => {
     socket.join('game:greedy');
     socket.join('game:teen-patti');
     socket.join('game:lucky-77');
+    socket.join('game:greedy-classic');
 
     const dev_user_id = config.allow_dev_identity_header
       ? String(socket.handshake.auth?.user_id || '').trim()

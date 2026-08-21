@@ -100,6 +100,10 @@ export const approvalParamSchema = z.object({
 });
 
 export type CreateGreedyConfigBody = z.infer<typeof createGreedyConfigSchema>['body'];
+
+/** Same 8-option validation as Greedy; used by Greedy Classic admin routes. */
+export const createGreedyClassicConfigSchema = createGreedyConfigSchema;
+export type CreateGreedyClassicConfigBody = CreateGreedyConfigBody;
 export type CancelRoundBody = z.infer<typeof cancelRoundSchema>['body'];
 
 export const createLucky77ConfigSchema = z.object({

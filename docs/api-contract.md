@@ -80,6 +80,22 @@ Same body as Greedy (`round_id`, `option_id`, `amount`, `client_request_id`).
 
 ### GET `/games/lucky-77/rounds/:round_id`
 
+## Greedy Classic player/game
+
+Exact parallel of Greedy under game code `GREEDY_CLASSIC`. Same 8 options (Falcon…Diamond), payouts, weights, chips, and phase timings. Snapshot and bet shapes match Greedy.
+
+### GET `/games/greedy-classic/snapshot`
+
+### POST `/games/greedy-classic/bets`
+
+Same body as Greedy (`round_id`, `option_id`, `amount`, `client_request_id`). Returns HTTP 201.
+
+### GET `/games/greedy-classic/my-bets?page=1&limit=20`
+
+### GET `/games/greedy-classic/rounds?page=1&limit=20`
+
+### GET `/games/greedy-classic/rounds/:round_id`
+
 ## Wallet
 
 ### GET `/wallets/me`
@@ -154,6 +170,10 @@ Same runtime/config/ops surface under `/admin/games/teen-patti/...`. Config crea
 ### Lucky 77 admin
 
 Same runtime/config/ops surface under `/admin/games/lucky-77/...`. Config create requires exactly 3 options with payout numerator/denominator and probability weights. Approvals use `lucky_77.config.publish` and `lucky_77.round.cancel`. Ops rounds and result verification expose `winning_slot_index`.
+
+### Greedy Classic admin
+
+Same runtime/config/ops surface under `/admin/games/greedy-classic/...`. Config create reuses the Greedy 8-option validator. Approvals use `greedy_classic.config.publish` and `greedy_classic.round.cancel`.
 
 ### POST `/admin/wallets/adjust`
 
