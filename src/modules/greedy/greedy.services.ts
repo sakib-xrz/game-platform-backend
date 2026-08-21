@@ -23,7 +23,7 @@ import {
 import type { BetResponse } from './greedy.types';
 import type { PlaceBetBody } from './greedy.validation';
 import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
-import { withSerializableRetry } from './greedy.utils';
+import { withSerializableRetry, withPayoutMultiplier, withPayoutMultipliers } from './greedy.utils';
 import { randomUUID } from 'node:crypto';
 
 const public_result_statuses: GreedyRoundStatus[] = [
@@ -266,6 +266,34 @@ const getSnapshot = async (user_id: string) => {
     });
   }
 
+  const decorateResult = <
+    T extends {
+      winning_option?: {
+        payout_numerator: bigint | number | string;
+        payout_denominator: bigint | number | string;
+      } | null;
+    } | null,
+  >(
+    result: T,
+  ): T => {
+    if (!result?.winning_option) return result;
+    return {
+      ...result,
+      winning_option: withPayoutMultiplier(result.winning_option),
+    };
+  };
+
+  const public_active_config = {
+    ...active_config,
+    options: withPayoutMultipliers(active_config.options),
+  };
+  const public_current_config = current_config
+    ? {
+        ...current_config,
+        options: withPayoutMultipliers(current_config.options),
+      }
+    : null;
+
   return {
     server_time: new Date(),
     game: { code: game.code, name: game.name, status: game.status },
@@ -273,7 +301,7 @@ const getSnapshot = async (user_id: string) => {
       status: game.greedy_runtime_state.status,
       revision: game.greedy_runtime_state.revision,
     },
-    active_config,
+    active_config: public_active_config,
     round: current_round
       ? {
           id: current_round.id,
@@ -285,22 +313,28 @@ const getSnapshot = async (user_id: string) => {
           result_reveal_at: current_round.result_reveal_at,
           config_version_id: current_round.config_version_id,
           betting_duration_ms:
-            current_config!.betting_duration_ms,
-          lock_duration_ms: current_config!.lock_duration_ms,
+            public_current_config!.betting_duration_ms,
+          lock_duration_ms: public_current_config!.lock_duration_ms,
           drawing_duration_ms:
-            current_config!.drawing_duration_ms,
-          result_duration_ms: current_config!.result_duration_ms,
-          min_bet: current_config!.min_bet,
-          max_single_bet: current_config!.max_single_bet,
-          max_round_bet: current_config!.max_round_bet,
-          options: current_config!.options,
-          chip_values: current_config!.chip_values,
-          result: result_is_public ? current_result : null,
+            public_current_config!.drawing_duration_ms,
+          result_duration_ms: public_current_config!.result_duration_ms,
+          min_bet: public_current_config!.min_bet,
+          max_single_bet: public_current_config!.max_single_bet,
+          max_round_bet: public_current_config!.max_round_bet,
+          options: public_current_config!.options,
+          chip_values: public_current_config!.chip_values,
+          result: result_is_public ? decorateResult(current_result) : null,
         }
       : null,
     wallet,
-    my_bets,
-    recent_history: history,
+    my_bets: my_bets.map((bet) => ({
+      ...bet,
+      option: withPayoutMultiplier(bet.option),
+    })),
+    recent_history: history.map((round) => ({
+      ...round,
+      result: decorateResult(round.result),
+    })),
   };
 };
 
@@ -677,7 +711,14 @@ const getMyBets = async (user_id: string, page = 1, limit = 20) => {
     }),
     prisma.greedyBet.count({ where: { user_id } }),
   ]);
-  return { items, total, ...pagination };
+  return {
+    items: items.map((item) => ({
+      ...item,
+      option: withPayoutMultiplier(item.option),
+    })),
+    total,
+    ...pagination,
+  };
 };
 
 const getRoundHistory = async (page = 1, limit = 20) => {
@@ -719,7 +760,19 @@ const getRoundHistory = async (page = 1, limit = 20) => {
     }),
     prisma.greedyRound.count({ where }),
   ]);
-  return { items, total, ...pagination };
+  return {
+    items: items.map((item) => ({
+      ...item,
+      result: item.result
+        ? {
+            ...item.result,
+            winning_option: withPayoutMultiplier(item.result.winning_option),
+          }
+        : item.result,
+    })),
+    total,
+    ...pagination,
+  };
 };
 
 const getRound = async (round_id: string) => {
@@ -748,8 +801,22 @@ const getRound = async (round_id: string) => {
   }
 
   const result_is_public = public_result_statuses.includes(round.status);
+  const result =
+    result_is_public && round.result
+      ? {
+          ...round.result,
+          winning_option: withPayoutMultiplier(round.result.winning_option),
+        }
+      : null;
 
-  return { ...round, result: result_is_public ? round.result : null };
+  return {
+    ...round,
+    config_version: {
+      ...round.config_version,
+      options: withPayoutMultipliers(round.config_version.options),
+    },
+    result,
+  };
 };
 
 const GreedyService = {

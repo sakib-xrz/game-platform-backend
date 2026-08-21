@@ -58,3 +58,36 @@ export const calculatePayout = (
   if (denominator <= 0n) throw new Error('Invalid payout denominator');
   return (amount * numerator) / denominator;
 };
+
+/** Player-facing multiplier label, e.g. "8x" or "3/2x". */
+export const formatPayoutMultiplier = (
+  numerator: bigint | number | string,
+  denominator: bigint | number | string,
+): string => {
+  try {
+    const n = BigInt(numerator);
+    const d = BigInt(denominator);
+    if (d === 0n) return '—';
+    if (n % d === 0n) return `${n / d}x`;
+    return `${n.toString()}/${d.toString()}x`;
+  } catch {
+    return '—';
+  }
+};
+
+type OptionWithPayout = {
+  payout_numerator: bigint | number | string;
+  payout_denominator: bigint | number | string;
+};
+
+export const withPayoutMultiplier = <T extends OptionWithPayout>(option: T) => ({
+  ...option,
+  payout_multiplier: formatPayoutMultiplier(
+    option.payout_numerator,
+    option.payout_denominator,
+  ),
+});
+
+export const withPayoutMultipliers = <T extends OptionWithPayout>(
+  options: T[],
+) => options.map(withPayoutMultiplier);

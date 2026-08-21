@@ -61,7 +61,18 @@ const config = (id: string) => ({
   max_single_bet: 10_000n,
   max_round_bet: 50_000n,
   rake_bps: 500,
-  options: [],
+  options: [
+    {
+      id: `${id}-opt`,
+      code: 'SHARK',
+      name: 'Shark',
+      image_url: null,
+      display_order: 1,
+      payout_numerator: 8n,
+      payout_denominator: 1n,
+      is_enabled: true,
+    },
+  ],
   chip_values: [],
 });
 
@@ -130,6 +141,8 @@ describe('public snapshot query contract', () => {
     ).toEqual({ is_enabled: true });
     expect(snapshot.active_config.id).toBe(active_config.id);
     expect(snapshot.round?.config_version_id).toBe(frozen_config.id);
+    expect(snapshot.active_config.options[0]?.payout_multiplier).toBe('8x');
+    expect(snapshot.round?.options[0]?.payout_multiplier).toBe('8x');
     expect(snapshot.recent_history.map((item) => item.id)).toEqual([
       'older-greedy-round',
     ]);
