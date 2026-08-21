@@ -477,6 +477,23 @@ const placeBetTransaction = async (
       );
     }
 
+    // One selection per round: a user may stack more chips on the deck they
+    // already backed, but may not spread bets across multiple decks.
+    const conflicting_bet = await tx.teenPattiBet.findFirst({
+      where: {
+        round_id: barrier.id,
+        user_id,
+        option_version_id: { not: barrier.option_id },
+      },
+      select: { id: true },
+    });
+    if (conflicting_bet) {
+      throw new AppError(
+        httpStatus.CONFLICT,
+        'You can back only one hand per round',
+      );
+    }
+
     const wallet_rows = await tx.$queryRaw<
       Array<{
         id: string;

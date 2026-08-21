@@ -467,6 +467,23 @@ const placeBetTransaction = async (
       );
     }
 
+    // One selection per round: a user may stack more chips on the option they
+    // already backed, but may not spread bets across multiple options.
+    const conflicting_bet = await tx.greedyBet.findFirst({
+      where: {
+        round_id: barrier.id,
+        user_id,
+        option_version_id: { not: barrier.option_id },
+      },
+      select: { id: true },
+    });
+    if (conflicting_bet) {
+      throw new AppError(
+        httpStatus.CONFLICT,
+        'You can back only one option per round',
+      );
+    }
+
     const wallet_rows = await tx.$queryRaw<
       Array<{
         id: string;
