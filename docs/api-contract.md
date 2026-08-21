@@ -62,6 +62,24 @@ Same body as Greedy (`round_id`, `option_id` of a deck, `amount`, `client_reques
 
 ### GET `/games/teen-patti/rounds/:round_id`
 
+## Lucky 77 player/game
+
+Fixed-multiplier wheel cloned from Greedy. Exactly three options (`APPLE`, `WATERMELON`, `SEVENTY_SEVEN`) with a fixed nine-slot map. After lock the worker picks a weighted option, then a uniform matching slot index. Snapshot always includes `slot_map`; after reveal, results include `winning_slot_index`.
+
+### GET `/games/lucky-77/snapshot`
+
+Same snapshot shape as Greedy, plus `slot_map`. Public results include `winning_slot_index`.
+
+### POST `/games/lucky-77/bets`
+
+Same body as Greedy (`round_id`, `option_id`, `amount`, `client_request_id`).
+
+### GET `/games/lucky-77/my-bets?page=1&limit=20`
+
+### GET `/games/lucky-77/rounds?page=1&limit=20`
+
+### GET `/games/lucky-77/rounds/:round_id`
+
 ## Wallet
 
 ### GET `/wallets/me`
@@ -132,6 +150,10 @@ Cancellation exposure at or above the policy threshold returns `202 pending_appr
 ### Teen Patti admin
 
 Same runtime/config/ops surface under `/admin/games/teen-patti/...`. Config create requires exactly 3 decks and `rake_bps` (0–2000). Approvals use `teen_patti.config.publish` and `teen_patti.round.cancel`.
+
+### Lucky 77 admin
+
+Same runtime/config/ops surface under `/admin/games/lucky-77/...`. Config create requires exactly 3 options with payout numerator/denominator and probability weights. Approvals use `lucky_77.config.publish` and `lucky_77.round.cancel`. Ops rounds and result verification expose `winning_slot_index`.
 
 ### POST `/admin/wallets/adjust`
 

@@ -14,14 +14,20 @@ import {
   recoverTeenPattiRuntime,
   runTeenPattiTick,
 } from '@/workers/teen-patti-round.worker';
+import {
+  recoverLucky77Runtime,
+  runLucky77Tick,
+} from '@/workers/lucky-77-round.worker';
 import { logger } from '@/utils/logger';
 
 const GREEDY_LEASE_KEY = 'game-worker:greedy';
 const TEEN_PATTI_LEASE_KEY = 'game-worker:teen-patti';
+const LUCKY_77_LEASE_KEY = 'game-worker:lucky-77';
 const LEASE_REFRESH_MS = 2000;
 let stopping = false;
 let greedy_leader = false;
 let teen_patti_leader = false;
+let lucky_77_leader = false;
 let lease_refresh_timer: NodeJS.Timeout | null = null;
 let lease_refresh_task: Promise<void> | null = null;
 let health_server: http.Server | undefined;
@@ -52,13 +58,15 @@ const refreshLeadership = (): Promise<void> => {
 
   const task = (async () => {
     try {
-      [greedy_leader, teen_patti_leader] = await Promise.all([
+      [greedy_leader, teen_patti_leader, lucky_77_leader] = await Promise.all([
         acquireOrRenewLease(GREEDY_LEASE_KEY, config.worker_instance_id),
         acquireOrRenewLease(TEEN_PATTI_LEASE_KEY, config.worker_instance_id),
+        acquireOrRenewLease(LUCKY_77_LEASE_KEY, config.worker_instance_id),
       ]);
     } catch (error) {
       greedy_leader = false;
       teen_patti_leader = false;
+      lucky_77_leader = false;
       logger.error('game_worker_lease_refresh_failed', { error });
     }
   })();
@@ -75,6 +83,7 @@ const main = async (): Promise<void> => {
   await connectRedis();
   await recoverGreedyRuntime();
   await recoverTeenPattiRuntime();
+  await recoverLucky77Runtime();
   health_server = await startHealthServer(config.worker_health_port);
   logger.info('game_worker_started', {
     instance_id: config.worker_instance_id,
@@ -90,13 +99,14 @@ const main = async (): Promise<void> => {
       // The games have independent runtimes and tables. Advancing them in
       // parallel prevents a slow transition or settlement in one game from
       // stretching every phase deadline in the other game.
-      const [greedy_tick, teen_patti_tick] = await Promise.allSettled([
+      const [greedy_tick, teen_patti_tick, lucky_77_tick] = await Promise.allSettled([
         greedy_leader ? runGreedyTick() : Promise.resolve(),
         teen_patti_leader ? runTeenPattiTick() : Promise.resolve(),
+        lucky_77_leader ? runLucky77Tick() : Promise.resolve(),
       ]);
 
-      // Wait for both ticks to finish before the next loop so a fast failure
-      // cannot leave the other game running in the background. Demote only the
+      // Wait for all ticks to finish before the next loop so a fast failure
+      // cannot leave another game running in the background. Demote only the
       // failed game's leadership; an unrelated game keeps progressing.
       if (greedy_tick.status === 'rejected') {
         greedy_leader = false;
@@ -112,10 +122,18 @@ const main = async (): Promise<void> => {
           error: teen_patti_tick.reason,
         });
       }
+      if (lucky_77_tick.status === 'rejected') {
+        lucky_77_leader = false;
+        logger.error('game_worker_tick_failed', {
+          game_code: 'LUCKY_77',
+          error: lucky_77_tick.reason,
+        });
+      }
     } catch (error) {
       logger.error('game_worker_loop_failed', { error });
       greedy_leader = false;
       teen_patti_leader = false;
+      lucky_77_leader = false;
     }
 
     if (!stopping) await sleep(config.greedy_worker_poll_ms);
@@ -133,6 +151,9 @@ const cleanup = async (): Promise<void> => {
     }
     if (teen_patti_leader) {
       await releaseLease(TEEN_PATTI_LEASE_KEY, config.worker_instance_id);
+    }
+    if (lucky_77_leader) {
+      await releaseLease(LUCKY_77_LEASE_KEY, config.worker_instance_id);
     }
   } catch (error) {
     logger.warn('game_worker_lease_release_failed', { error });

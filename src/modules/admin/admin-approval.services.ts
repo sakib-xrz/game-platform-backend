@@ -12,7 +12,7 @@ const approvalPayloadHash = (payload: Prisma.JsonValue): string => sha256(canoni
 
 export const approvalEligibleRoles = (action_type: string): AdminRole[] => {
   if (action_type.startsWith('wallet.')) return [AdminRole.super_admin, AdminRole.finance_operator];
-  if (action_type.startsWith('greedy.') || action_type.startsWith('teen_patti.') || action_type.startsWith('game.')) return [AdminRole.super_admin, AdminRole.game_operator];
+  if (action_type.startsWith('greedy.') || action_type.startsWith('teen_patti.') || action_type.startsWith('lucky_77.') || action_type.startsWith('game.')) return [AdminRole.super_admin, AdminRole.game_operator];
   return [AdminRole.super_admin];
 };
 
@@ -111,6 +111,8 @@ export const listApprovals = async (admin_user_id: string, page = 1, limit = 20)
     'greedy.round.cancel': true,
     'teen_patti.config.publish': true,
     'teen_patti.round.cancel': true,
+    'lucky_77.config.publish': true,
+    'lucky_77.round.cancel': true,
     'game.runtime.control': true,
   }).filter((action) => approvalEligibleRoles(action).includes(admin.role));
   const where: Prisma.AdminApprovalRequestWhereInput = admin.role === AdminRole.super_admin || admin.role === AdminRole.auditor

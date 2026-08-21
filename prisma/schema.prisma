@@ -74,6 +74,31 @@ enum TeenPattiRoundStatus {
   @@map("teen_patti_round_status")
 }
 
+
+enum Lucky77RuntimeStatus {
+  stopped
+  running
+  paused
+  degraded
+
+  @@map("lucky_77_runtime_status")
+}
+
+enum Lucky77RoundStatus {
+  created
+  betting_open
+  betting_locked
+  result_ready
+  drawing
+  result_revealed
+  settling
+  settled
+  closed
+  cancelled
+
+  @@map("lucky_77_round_status")
+}
+
 enum WalletLedgerType {
   bet_debit
   win_credit
@@ -214,6 +239,9 @@ model Wallet {
   teen_patti_bets    TeenPattiBet[]
   teen_patti_payouts TeenPattiUserPayout[]
   teen_patti_refunds TeenPattiUserRefund[]
+  lucky_77_bets    Lucky77Bet[]
+  lucky_77_payouts Lucky77UserPayout[]
+  lucky_77_refunds Lucky77UserRefund[]
 
   @@unique([user_id, currency_id])
   @@index([user_id])
@@ -244,6 +272,9 @@ model WalletLedger {
   teen_patti_debit_bet TeenPattiBet?        @relation("teen_patti_bet_debit_ledger")
   teen_patti_payout    TeenPattiUserPayout? @relation("teen_patti_payout_ledger")
   teen_patti_refund    TeenPattiUserRefund? @relation("teen_patti_refund_ledger")
+  lucky_77_debit_bet Lucky77Bet?        @relation("lucky_77_bet_debit_ledger")
+  lucky_77_payout    Lucky77UserPayout? @relation("lucky_77_payout_ledger")
+  lucky_77_refund    Lucky77UserRefund? @relation("lucky_77_refund_ledger")
 
   @@index([wallet_id, created_at])
   @@index([user_id, created_at])
@@ -269,6 +300,10 @@ model Game {
   teen_patti_config_versions TeenPattiConfigVersion[]
   teen_patti_rounds          TeenPattiRound[]
   teen_patti_bets            TeenPattiBet[]
+  lucky_77_runtime_state   Lucky77RuntimeState?
+  lucky_77_config_versions Lucky77ConfigVersion[]
+  lucky_77_rounds          Lucky77Round[]
+  lucky_77_bets            Lucky77Bet[]
 
   @@map("games")
 }
@@ -732,6 +767,238 @@ model TeenPattiUserRefund {
   @@map("teen_patti_user_refunds")
 }
 
+
+model Lucky77RuntimeState {
+  id                       String              @id @default(cuid())
+  game_id                  String              @unique
+  current_round_id         String?             @unique
+  active_config_version_id String?
+  status                   Lucky77RuntimeStatus @default(stopped)
+  last_round_number        BigInt              @default(0)
+  revision                 BigInt              @default(0)
+  updated_at               DateTime            @updatedAt
+  created_at               DateTime            @default(now())
+
+  game                  Game                  @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  current_round         Lucky77Round?         @relation("lucky_77_runtime_current_round", fields: [current_round_id], references: [id], onDelete: SetNull)
+  active_config_version Lucky77ConfigVersion? @relation("lucky_77_runtime_active_config", fields: [active_config_version_id], references: [id], onDelete: Restrict)
+
+  @@map("lucky_77_runtime_state")
+}
+
+model Lucky77ConfigVersion {
+  id                     String              @id @default(cuid())
+  game_id                String
+  version                Int
+  status                 ConfigVersionStatus @default(draft)
+  betting_duration_ms    Int
+  lock_duration_ms       Int
+  drawing_duration_ms    Int
+  result_duration_ms     Int
+  min_bet                BigInt
+  max_single_bet         BigInt
+  max_round_bet          BigInt
+  created_by             String?
+  notes                  String?
+  created_at             DateTime            @default(now())
+  updated_at             DateTime            @updatedAt
+  published_at           DateTime?
+  retired_at             DateTime?
+
+  game                   Game                  @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  options                Lucky77OptionVersion[]
+  chip_values            Lucky77ChipValueVersion[]
+  rounds                 Lucky77Round[]
+  results                Lucky77RoundResult[]
+  active_runtime_states  Lucky77RuntimeState[] @relation("lucky_77_runtime_active_config")
+
+  @@unique([game_id, version])
+  @@index([game_id, status])
+  @@map("lucky_77_config_versions")
+}
+
+model Lucky77ChipValueVersion {
+  id                String   @id @default(cuid())
+  config_version_id String
+  amount            BigInt
+  display_order     Int
+  is_enabled        Boolean  @default(true)
+  created_at        DateTime @default(now())
+
+  config_version Lucky77ConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+
+  @@unique([config_version_id, amount])
+  @@unique([config_version_id, display_order])
+  @@index([config_version_id, is_enabled])
+  @@map("lucky_77_chip_value_versions")
+}
+
+model Lucky77OptionVersion {
+  id                    String   @id @default(cuid())
+  config_version_id     String
+  code                  String
+  name                  String
+  image_url             String?
+  asset_id              String?
+  display_order         Int
+  payout_numerator      BigInt
+  payout_denominator    BigInt   @default(1)
+  probability_weight    BigInt
+  is_enabled            Boolean  @default(true)
+  created_at            DateTime @default(now())
+
+  config_version Lucky77ConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  asset          AdminAsset?          @relation(fields: [asset_id], references: [id], onDelete: Restrict)
+  bets           Lucky77Bet[]
+  winning_results Lucky77RoundResult[] @relation("lucky_77_winning_option")
+
+  @@unique([config_version_id, code])
+  @@unique([config_version_id, display_order])
+  @@index([config_version_id, is_enabled])
+  @@map("lucky_77_option_versions")
+}
+
+model Lucky77Round {
+  id                    String             @id @default(cuid())
+  game_id               String
+  round_number          BigInt
+  config_version_id     String
+  status                Lucky77RoundStatus @default(created)
+  betting_started_at    DateTime?
+  betting_ends_at       DateTime?
+  locked_at             DateTime?
+  result_generated_at   DateTime?
+  drawing_started_at    DateTime?
+  result_reveal_at      DateTime?
+  settlement_started_at DateTime?
+  settled_at            DateTime?
+  closed_at             DateTime?
+  cancelled_at          DateTime?
+  cancellation_reason   String?
+  created_at            DateTime           @default(now())
+  updated_at            DateTime           @updatedAt
+
+  game           Game                 @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  config_version Lucky77ConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  result         Lucky77RoundResult?
+  bets           Lucky77Bet[]
+  settlements    Lucky77BetSettlement[]
+  payouts        Lucky77UserPayout[]
+  refunds        Lucky77UserRefund[]
+  runtime_current Lucky77RuntimeState? @relation("lucky_77_runtime_current_round")
+
+  @@unique([game_id, round_number])
+  @@index([game_id, status])
+  @@index([status, betting_ends_at])
+  @@index([created_at])
+  @@map("lucky_77_rounds")
+}
+
+model Lucky77RoundResult {
+  id                        String   @id @default(cuid())
+  round_id                  String   @unique
+  winning_option_version_id String
+  winning_slot_index        Int
+  algorithm_version         String
+  config_version_id         String
+  entropy_digest            String
+  audit_hash                String
+  generated_at              DateTime @default(now())
+  revealed_at               DateTime?
+
+  round          Lucky77Round         @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  winning_option Lucky77OptionVersion @relation("lucky_77_winning_option", fields: [winning_option_version_id], references: [id], onDelete: Restrict)
+  config_version Lucky77ConfigVersion @relation(fields: [config_version_id], references: [id], onDelete: Restrict)
+  settlements    Lucky77BetSettlement[]
+
+  @@index([generated_at])
+  @@map("lucky_77_round_results")
+}
+
+model Lucky77Bet {
+  id                      String   @id @default(cuid())
+  game_id                 String
+  round_id                String
+  user_id                 String
+  wallet_id               String
+  option_version_id       String
+  amount                  BigInt
+  payout_numerator        BigInt
+  payout_denominator      BigInt
+  client_request_id       String
+  wallet_debit_ledger_id  String   @unique
+  accepted_at             DateTime @default(now())
+  created_at              DateTime @default(now())
+
+  game          Game                 @relation(fields: [game_id], references: [id], onDelete: Restrict)
+  round         Lucky77Round         @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet        Wallet               @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  option        Lucky77OptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
+  debit_ledger  WalletLedger         @relation("lucky_77_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  settlement    Lucky77BetSettlement?
+
+  @@unique([user_id, client_request_id])
+  @@index([round_id, user_id])
+  @@index([round_id, option_version_id])
+  @@index([user_id, created_at])
+  @@map("lucky_77_bets")
+}
+
+model Lucky77BetSettlement {
+  id            String            @id @default(cuid())
+  round_id      String
+  bet_id        String            @unique
+  result_id     String?
+  outcome       SettlementOutcome
+  payout_amount BigInt            @default(0)
+  settled_at    DateTime          @default(now())
+
+  round  Lucky77Round       @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  bet    Lucky77Bet         @relation(fields: [bet_id], references: [id], onDelete: Restrict)
+  result Lucky77RoundResult? @relation(fields: [result_id], references: [id], onDelete: Restrict)
+
+  @@index([round_id, outcome])
+  @@map("lucky_77_bet_settlements")
+}
+
+model Lucky77UserPayout {
+  id                    String   @id @default(cuid())
+  round_id              String
+  user_id               String
+  wallet_id             String
+  winning_bet_count     Int
+  total_winning_stake   BigInt
+  total_payout          BigInt
+  wallet_ledger_id      String   @unique
+  created_at            DateTime @default(now())
+
+  round        Lucky77Round  @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet       Wallet        @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation("lucky_77_payout_ledger", fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([round_id, user_id])
+  @@index([user_id, created_at])
+  @@map("lucky_77_user_payouts")
+}
+
+model Lucky77UserRefund {
+  id               String   @id @default(cuid())
+  round_id         String
+  user_id          String
+  wallet_id        String
+  total_bet_amount BigInt
+  wallet_ledger_id String   @unique
+  created_at       DateTime @default(now())
+
+  round         Lucky77Round  @relation(fields: [round_id], references: [id], onDelete: Restrict)
+  wallet        Wallet        @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger  @relation("lucky_77_refund_ledger", fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([round_id, user_id])
+  @@index([user_id, created_at])
+  @@map("lucky_77_user_refunds")
+}
+
 model IdempotencyRecord {
   id              String            @id @default(cuid())
   user_id         String
@@ -933,6 +1200,7 @@ model AdminAsset {
   uploaded_by AdminUser             @relation(fields: [uploaded_by_admin_id], references: [id], onDelete: Restrict)
   options    GreedyOptionVersion[]
   teen_patti_options TeenPattiOptionVersion[]
+  lucky_77_options Lucky77OptionVersion[]
 
   @@index([status, created_at])
   @@map("admin_assets")

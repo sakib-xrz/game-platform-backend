@@ -6,9 +6,11 @@ import { requireAdminIdempotency } from '@/middlewares/admin-idempotency';
 import validateRequest from '@/middlewares/validate-request';
 import GameAdminController from './game-admin.controller';
 import TeenPattiAdminController from './teen-patti-admin.controller';
-import { approvalParamSchema, cancelRoundSchema, configParamSchema, createGreedyConfigSchema, createTeenPattiConfigSchema } from './game-admin.validation';
+import Lucky77AdminController from './lucky-77-admin.controller';
+import { approvalParamSchema, cancelRoundSchema, configParamSchema, createGreedyConfigSchema, createLucky77ConfigSchema, createTeenPattiConfigSchema } from './game-admin.validation';
 import GreedyAdminOpsRoutes from './greedy-admin-ops.routes';
 import TeenPattiAdminOpsRoutes from './teen-patti-admin-ops.routes';
+import Lucky77AdminOpsRoutes from './lucky-77-admin-ops.routes';
 
 export const GameAdminRoutes = express.Router();
 GameAdminRoutes.use(adminAuth, adminPasswordGate);
@@ -35,3 +37,15 @@ GameAdminRoutes.post('/teen-patti/resume', requireAdminPermission('game.runtime.
 GameAdminRoutes.post('/teen-patti/pause', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('teen_patti.pause'), TeenPattiAdminController.pause);
 GameAdminRoutes.post('/teen-patti/cancel-current-round', requireAdminPermission('round.cancel'), requireAdminIdempotency('teen_patti.round.cancel'), validateRequest(cancelRoundSchema), TeenPattiAdminController.cancelCurrentRound);
 GameAdminRoutes.use('/teen-patti', TeenPattiAdminOpsRoutes);
+
+GameAdminRoutes.get('/lucky-77/runtime', requireAdminPermission('game.read'), Lucky77AdminController.getRuntime);
+GameAdminRoutes.get('/lucky-77/config-versions', requireAdminPermission('game.read'), Lucky77AdminController.listConfigs);
+GameAdminRoutes.post('/lucky-77/config-versions/validate', requireAdminPermission('game.config.draft.create'), validateRequest(createLucky77ConfigSchema), Lucky77AdminController.validateConfig);
+GameAdminRoutes.post('/lucky-77/config-versions', requireAdminPermission('game.config.draft.create'), requireAdminIdempotency('lucky_77.config.create'), validateRequest(createLucky77ConfigSchema), Lucky77AdminController.createConfig);
+GameAdminRoutes.post('/lucky-77/config-versions/:config_id/publish', requireAdminPermission('game.config.publish'), requireAdminIdempotency('lucky_77.config.publish'), validateRequest(configParamSchema), Lucky77AdminController.publishConfig);
+GameAdminRoutes.post('/lucky-77/config-versions/:config_id/publish-request', requireAdminPermission('game.config.publish'), requireAdminIdempotency('lucky_77.config.publish.request'), validateRequest(configParamSchema), Lucky77AdminController.requestPublishConfig);
+GameAdminRoutes.post('/lucky-77/config-versions/publish-approved', requireAdminPermission('game.config.publish'), requireAdminIdempotency('lucky_77.config.publish.apply'), validateRequest(approvalParamSchema), Lucky77AdminController.publishApprovedConfig);
+GameAdminRoutes.post('/lucky-77/resume', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('lucky_77.resume'), Lucky77AdminController.resume);
+GameAdminRoutes.post('/lucky-77/pause', requireAdminPermission('game.runtime.control'), requireAdminIdempotency('lucky_77.pause'), Lucky77AdminController.pause);
+GameAdminRoutes.post('/lucky-77/cancel-current-round', requireAdminPermission('round.cancel'), requireAdminIdempotency('lucky_77.round.cancel'), validateRequest(cancelRoundSchema), Lucky77AdminController.cancelCurrentRound);
+GameAdminRoutes.use('/lucky-77', Lucky77AdminOpsRoutes);
