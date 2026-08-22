@@ -5,6 +5,7 @@ import TeenPattiService from '@/modules/teen-patti/teen-patti.services';
 const mocks = vi.hoisted(() => ({
   gameFindUnique: vi.fn(),
   greedyBetFindMany: vi.fn(),
+  greedyBetGroupBy: vi.fn(),
   greedyRoundFindMany: vi.fn(),
   greedyConfigFindMany: vi.fn(),
   greedyResultFindFirst: vi.fn(),
@@ -21,7 +22,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/prisma', () => ({
   default: {
     game: { findUnique: mocks.gameFindUnique },
-    greedyBet: { findMany: mocks.greedyBetFindMany },
+    greedyBet: {
+      findMany: mocks.greedyBetFindMany,
+      groupBy: mocks.greedyBetGroupBy,
+    },
     greedyRound: { findMany: mocks.greedyRoundFindMany },
     greedyConfigVersion: { findMany: mocks.greedyConfigFindMany },
     greedyRoundResult: {
@@ -93,6 +97,7 @@ describe('public snapshot query contract', () => {
     vi.clearAllMocks();
     mocks.ensureWallet.mockResolvedValue({ id: 'wallet', balance: 100n });
     mocks.greedyBetFindMany.mockResolvedValue([]);
+    mocks.greedyBetGroupBy.mockResolvedValue([]);
     mocks.greedyRoundFindMany.mockResolvedValue([]);
     mocks.greedyResultFindFirst.mockResolvedValue(null);
     mocks.greedyResultFindUnique.mockResolvedValue(null);
@@ -129,6 +134,17 @@ describe('public snapshot query contract', () => {
         },
       },
     });
+    mocks.greedyBetGroupBy.mockResolvedValue([
+      {
+        round_id: 'greedy-round',
+        option_version_id: 'greedy-frozen-config-opt',
+        user_id: 'player-2',
+        _sum: { amount: 1500n },
+        _count: { _all: 2 },
+        _min: { accepted_at: new Date(1_000) },
+        _max: { accepted_at: new Date(2_000) },
+      },
+    ]);
 
     const snapshot = await GreedyService.getSnapshot('player');
 
@@ -143,10 +159,84 @@ describe('public snapshot query contract', () => {
     expect(snapshot.round?.config_version_id).toBe(frozen_config.id);
     expect(snapshot.active_config.options[0]?.payout_multiplier).toBe('8x');
     expect(snapshot.round?.options[0]?.payout_multiplier).toBe('8x');
+    expect(snapshot.round?.bettors).toEqual([
+      {
+        round_id: 'greedy-round',
+        option_id: 'greedy-frozen-config-opt',
+        user_id: 'player-2',
+        display_name: null,
+        avatar_url: null,
+        total_amount: '1500',
+        bet_count: 2,
+        first_bet_at: new Date(1_000).toISOString(),
+        last_bet_at: new Date(2_000).toISOString(),
+      },
+    ]);
     expect(snapshot.recent_history.map((item) => item.id)).toEqual([
       'older-greedy-round',
     ]);
     expect(mocks.greedyRoundFindMany.mock.calls[0]![0].take).toBe(21);
+  });
+
+  it('adds the aggregate Top 3 contract only to a revealed Greedy result', async () => {
+    const active_config = config('greedy-active-config');
+    const frozen_config = config('greedy-frozen-config');
+    const winning_option = frozen_config.options[0]!;
+    const current_result = {
+      id: 'result-1',
+      round_id: 'greedy-round',
+      algorithm_version: 'test-v1',
+      generated_at: new Date(10_000),
+      revealed_at: new Date(20_000),
+      winning_option,
+    };
+    mocks.greedyConfigFindMany.mockResolvedValue([
+      active_config,
+      frozen_config,
+    ]);
+    mocks.greedyResultFindFirst.mockResolvedValue(current_result);
+    mocks.gameFindUnique.mockResolvedValue({
+      id: 'greedy-game',
+      code: 'GREEDY',
+      name: 'Greedy',
+      status: 'active',
+      greedy_runtime_state: {
+        status: 'running',
+        revision: 1n,
+        active_config_version_id: active_config.id,
+        current_round: {
+          ...round('greedy-round', frozen_config),
+          status: 'result_revealed',
+          config_version_id: frozen_config.id,
+        },
+      },
+    });
+    mocks.greedyBetGroupBy
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          round_id: 'greedy-round',
+          user_id: 'nasim',
+          _sum: { amount: 3000n },
+          _count: { _all: 2 },
+          _min: { accepted_at: new Date(1_000) },
+        },
+      ]);
+
+    const snapshot = await GreedyService.getSnapshot('player');
+
+    expect(snapshot.round?.result?.top_winners).toEqual([
+      {
+        rank: 1,
+        user_id: 'nasim',
+        display_name: null,
+        avatar_url: null,
+        winning_stake: '3000',
+        bet_count: 2,
+        total_payout: '24000',
+        first_bet_at: new Date(1_000).toISOString(),
+      },
+    ]);
   });
 
   it('filters disabled Teen Patti options and excludes the current round from history', async () => {

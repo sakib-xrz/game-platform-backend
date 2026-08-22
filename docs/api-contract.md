@@ -10,6 +10,26 @@ During local development with `ALLOW_DEV_IDENTITY_HEADER=true`, player endpoints
 
 Returns server time, game/runtime state, active config, current round, public options, current player's bets, wallet, and recent result history. A generated result remains hidden until the reveal state.
 
+`round.bettors` is the authoritative public recovery state for the current round. It contains one aggregate per option/user pair:
+
+```json
+{
+  "round_id": "<round-id>",
+  "option_id": "<option-id>",
+  "user_id": "user-001",
+  "display_name": null,
+  "avatar_url": null,
+  "total_amount": "3000",
+  "bet_count": 2,
+  "first_bet_at": "2026-08-22T00:00:01.000Z",
+  "last_bet_at": "2026-08-22T00:00:02.000Z"
+}
+```
+
+`display_name` and `avatar_url` remain `null` until the trusted platform profile integration is available. Clients may derive temporary initials or a shortened ID, but the API does not persist invented profile data.
+
+After reveal, `round.result.top_winners` contains at most three real winning users. Each entry has `rank`, identity fields, `winning_stake`, `bet_count`, `total_payout`, and `first_bet_at`. The backend sums all of a user's bets on the winning option before applying its stake-inclusive multiplier, then orders by `total_payout DESC`, `first_bet_at ASC`, and `user_id ASC`. The same result decoration is returned by round history/detail endpoints.
+
 ### POST `/games/greedy/bets`
 
 Headers:
@@ -30,7 +50,7 @@ Body:
 }
 ```
 
-`amount` is an integer string. The server validates the authoritative round, deadline, option/config, limits, wallet balance, and idempotency key inside a serializable database transaction.
+`amount` is an integer string. The server validates the authoritative round, deadline, option/config, limits, wallet balance, and idempotency key inside a serializable database transaction. Every accepted request debits immediately. A user may submit multiple requests against the same or different options in one round; `max_round_bet` applies to that user's combined accepted amount across all options.
 
 ### GET `/games/greedy/my-bets?page=1&limit=20`
 

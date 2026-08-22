@@ -11,6 +11,7 @@ import {
   Prisma,
   PrismaClient,
   TeenPattiRuntimeStatus,
+  WalletLedgerType,
 } from '../src/generated/prisma/client';
 import { hashAdminPassword, normalizeAdminEmail } from '../src/modules/admin/admin.crypto';
 
@@ -589,9 +590,71 @@ const main = async (): Promise<void> => {
     update: {},
   });
 
+  const default_users = ['user-001', 'user-002', 'user-003', 'user-004', 'user-005'];
+  const seeded_initial_balance = 10000n;
+
+  for (const user_id of default_users) {
+    const existing_wallet = await prisma.wallet.findUnique({
+      where: {
+        user_id_currency_id: {
+          user_id,
+          currency_id: currency.id,
+        },
+      },
+    });
+
+    if (!existing_wallet) {
+      const wallet = await prisma.wallet.create({
+        data: {
+          user_id,
+          currency_id: currency.id,
+          balance: seeded_initial_balance,
+          version: 0,
+        },
+      });
+
+      await prisma.walletLedger.create({
+        data: {
+          wallet_id: wallet.id,
+          user_id,
+          type: WalletLedgerType.admin_credit,
+          amount: seeded_initial_balance,
+          balance_before: 0n,
+          balance_after: seeded_initial_balance,
+          reference_type: 'initial_seed',
+          metadata: { reason: 'Initial dev seed balance' },
+        },
+      });
+    } else if (existing_wallet.balance !== seeded_initial_balance) {
+      const balance_difference = seeded_initial_balance - existing_wallet.balance;
+      const updated_wallet = await prisma.wallet.update({
+        where: { id: existing_wallet.id },
+        data: {
+          balance: seeded_initial_balance,
+          version: { increment: 1 },
+        },
+      });
+
+      await prisma.walletLedger.create({
+        data: {
+          wallet_id: updated_wallet.id,
+          user_id,
+          type: balance_difference > 0n ? WalletLedgerType.admin_credit : WalletLedgerType.admin_debit,
+          amount: balance_difference,
+          balance_before: existing_wallet.balance,
+          balance_after: seeded_initial_balance,
+          reference_type: 'initial_seed',
+          metadata: { reason: 'Reset dev seed balance to 10000' },
+        },
+      });
+    }
+  }
+
   console.log({
     seeded: true,
     currency: currency.code,
+    users: default_users,
+    user_initial_balance: seeded_initial_balance.toString(),
     game: game.code,
     teen_patti_game: teen_patti_game.code,
     lucky_77_game: lucky_77_game.code,

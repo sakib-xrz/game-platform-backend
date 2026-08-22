@@ -19,11 +19,25 @@ import {
   GREEDY_CURRENCY_CODE,
   GREEDY_GAME_CODE,
   GREEDY_IDEMPOTENCY_SCOPE,
+  GREEDY_SOCKET_ROOM,
 } from './greedy.constant';
-import type { BetResponse } from './greedy.types';
+import type {
+  BetResponse,
+  GreedyBettorAggregate,
+  GreedyTopWinner,
+} from './greedy.types';
 import type { PlaceBetBody } from './greedy.validation';
 import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
-import { withSerializableRetry, withPayoutMultiplier, withPayoutMultipliers } from './greedy.utils';
+import {
+  buildGreedyBetPlacedPayload,
+  withSerializableRetry,
+  withPayoutMultiplier,
+  withPayoutMultipliers,
+} from './greedy.utils';
+import {
+  getGreedyTopWinnersByRound,
+  type GreedyLeaderboardTarget,
+} from './greedy.leaderboard';
 import { randomUUID } from 'node:crypto';
 
 const public_result_statuses: GreedyRoundStatus[] = [
@@ -92,6 +106,36 @@ const requestHash = (payload: PlaceBetBody): string =>
     ].join('|'),
   );
 
+type ResultWithWinningOption = {
+  round_id: string;
+  winning_option: {
+    id: string;
+    payout_numerator: bigint;
+    payout_denominator: bigint;
+  };
+};
+
+const toLeaderboardTarget = (
+  result: ResultWithWinningOption,
+): GreedyLeaderboardTarget => ({
+  round_id: result.round_id,
+  winning_option_id: result.winning_option.id,
+  payout_numerator: result.winning_option.payout_numerator,
+  payout_denominator: result.winning_option.payout_denominator,
+});
+
+const decorateResult = <T extends ResultWithWinningOption>(
+  result: T | null,
+  top_winners: GreedyTopWinner[] = [],
+) => {
+  if (!result) return null;
+  return {
+    ...result,
+    winning_option: withPayoutMultiplier(result.winning_option),
+    top_winners,
+  };
+};
+
 const getSnapshot = async (user_id: string) => {
   const [
     game,
@@ -100,6 +144,7 @@ const getSnapshot = async (user_id: string) => {
     history_candidates,
     config_candidates,
     current_result_candidate,
+    current_bettor_groups,
   ] = await Promise.all([
     prisma.game.findUnique({
       where: { code: GREEDY_GAME_CODE },
@@ -200,6 +245,19 @@ const getSnapshot = async (user_id: string) => {
       },
       select: publicResultSelect,
     }),
+    prisma.greedyBet.groupBy({
+      by: ['round_id', 'option_version_id', 'user_id'],
+      where: {
+        round: {
+          game: { code: GREEDY_GAME_CODE },
+          runtime_current: { isNot: null },
+        },
+      },
+      _sum: { amount: true },
+      _count: { _all: true },
+      _min: { accepted_at: true },
+      _max: { accepted_at: true },
+    }),
   ]);
 
   if (
@@ -266,22 +324,49 @@ const getSnapshot = async (user_id: string) => {
     });
   }
 
-  const decorateResult = <
-    T extends {
-      winning_option?: {
-        payout_numerator: bigint | number | string;
-        payout_denominator: bigint | number | string;
-      } | null;
-    } | null,
-  >(
-    result: T,
-  ): T => {
-    if (!result?.winning_option) return result;
-    return {
-      ...result,
-      winning_option: withPayoutMultiplier(result.winning_option),
-    };
-  };
+  const bettors: GreedyBettorAggregate[] = current_round
+    ? current_bettor_groups
+        .filter(
+          (group) =>
+            group.round_id === current_round.id &&
+            group._sum.amount !== null &&
+            group._min.accepted_at !== null &&
+            group._max.accepted_at !== null,
+        )
+        .map((group) => ({
+          round_id: group.round_id,
+          option_id: group.option_version_id,
+          user_id: group.user_id,
+          display_name: null,
+          avatar_url: null,
+          total_amount: group._sum.amount!.toString(),
+          bet_count: group._count._all,
+          first_bet_at: group._min.accepted_at!.toISOString(),
+          last_bet_at: group._max.accepted_at!.toISOString(),
+        }))
+        .sort((left, right) => {
+          const recent_difference =
+            Date.parse(right.last_bet_at) - Date.parse(left.last_bet_at);
+          if (recent_difference !== 0) return recent_difference;
+          return left.user_id < right.user_id
+            ? -1
+            : left.user_id > right.user_id
+              ? 1
+              : 0;
+        })
+    : [];
+
+  const leaderboard_targets: GreedyLeaderboardTarget[] = [
+    ...(result_is_public && current_result
+      ? [toLeaderboardTarget(current_result)]
+      : []),
+    ...history.flatMap((round) =>
+      round.result ? [toLeaderboardTarget(round.result)] : [],
+    ),
+  ];
+  const top_winners_by_round = await getGreedyTopWinnersByRound(
+    leaderboard_targets,
+  );
 
   const public_active_config = {
     ...active_config,
@@ -323,7 +408,13 @@ const getSnapshot = async (user_id: string) => {
           max_round_bet: public_current_config!.max_round_bet,
           options: public_current_config!.options,
           chip_values: public_current_config!.chip_values,
-          result: result_is_public ? decorateResult(current_result) : null,
+          bettors,
+          result: result_is_public
+            ? decorateResult(
+                current_result,
+                top_winners_by_round.get(current_round.id) ?? [],
+              )
+            : null,
         }
       : null,
     wallet,
@@ -333,7 +424,10 @@ const getSnapshot = async (user_id: string) => {
     })),
     recent_history: history.map((round) => ({
       ...round,
-      result: decorateResult(round.result),
+      result: decorateResult(
+        round.result,
+        top_winners_by_round.get(round.id) ?? [],
+      ),
     })),
   };
 };
@@ -501,23 +595,6 @@ const placeBetTransaction = async (
       );
     }
 
-    // One selection per round: a user may stack more chips on the option they
-    // already backed, but may not spread bets across multiple options.
-    const conflicting_bet = await tx.greedyBet.findFirst({
-      where: {
-        round_id: barrier.id,
-        user_id,
-        option_version_id: { not: barrier.option_id },
-      },
-      select: { id: true },
-    });
-    if (conflicting_bet) {
-      throw new AppError(
-        httpStatus.CONFLICT,
-        'You can back only one option per round',
-      );
-    }
-
     const wallet_rows = await tx.$queryRaw<
       Array<{
         id: string;
@@ -598,6 +675,24 @@ const placeBetTransaction = async (
         wallet_debit_ledger_id: ledger.id,
       },
     });
+    const bettor_option_aggregate = await tx.greedyBet.aggregate({
+      where: {
+        round_id: barrier.id,
+        option_version_id: barrier.option_id,
+        user_id,
+      },
+      _sum: { amount: true },
+      _count: { _all: true },
+      _min: { accepted_at: true },
+      _max: { accepted_at: true },
+    });
+    if (
+      bettor_option_aggregate._sum.amount === null ||
+      bettor_option_aggregate._min.accepted_at === null ||
+      bettor_option_aggregate._max.accepted_at === null
+    ) {
+      throw new Error('Accepted Greedy bet aggregate is unavailable');
+    }
 
     const response: BetResponse = {
       bet_id: bet.id,
@@ -609,6 +704,20 @@ const placeBetTransaction = async (
       wallet_version: debited_wallet.version,
       accepted_at: bet.accepted_at.toISOString(),
     };
+    const public_bet_event = buildGreedyBetPlacedPayload(
+      {
+        id: bet.id,
+        round_id: barrier.id,
+        option_id: barrier.option_id,
+        amount,
+        accepted_at: bet.accepted_at,
+        total_amount: bettor_option_aggregate._sum.amount,
+        bet_count: bettor_option_aggregate._count._all,
+        first_bet_at: bettor_option_aggregate._min.accepted_at,
+        last_bet_at: bettor_option_aggregate._max.accepted_at,
+      },
+      user_id,
+    );
 
     await tx.idempotencyRecord.update({
       where: {
@@ -633,6 +742,13 @@ const placeBetTransaction = async (
           event_type: 'greedy.bet.accepted',
           socket_room: `user:${user_id}`,
           payload: toJsonSafe(response) as Prisma.InputJsonValue,
+        },
+        {
+          aggregate_type: 'greedy_bet',
+          aggregate_id: bet.id,
+          event_type: 'greedy.bet.placed',
+          socket_room: GREEDY_SOCKET_ROOM,
+          payload: toJsonSafe(public_bet_event) as Prisma.InputJsonValue,
         },
         {
           aggregate_type: 'wallet',
@@ -760,15 +876,18 @@ const getRoundHistory = async (page = 1, limit = 20) => {
     }),
     prisma.greedyRound.count({ where }),
   ]);
+  const top_winners_by_round = await getGreedyTopWinnersByRound(
+    items.flatMap((item) =>
+      item.result ? [toLeaderboardTarget(item.result)] : [],
+    ),
+  );
   return {
     items: items.map((item) => ({
       ...item,
-      result: item.result
-        ? {
-            ...item.result,
-            winning_option: withPayoutMultiplier(item.result.winning_option),
-          }
-        : item.result,
+      result: decorateResult(
+        item.result,
+        top_winners_by_round.get(item.id) ?? [],
+      ),
     })),
     total,
     ...pagination,
@@ -801,13 +920,18 @@ const getRound = async (round_id: string) => {
   }
 
   const result_is_public = public_result_statuses.includes(round.status);
-  const result =
+  const top_winners_by_round =
     result_is_public && round.result
-      ? {
-          ...round.result,
-          winning_option: withPayoutMultiplier(round.result.winning_option),
-        }
-      : null;
+      ? await getGreedyTopWinnersByRound([
+          toLeaderboardTarget(round.result),
+        ])
+      : new Map<string, GreedyTopWinner[]>();
+  const result = result_is_public
+    ? decorateResult(
+        round.result,
+        top_winners_by_round.get(round.id) ?? [],
+      )
+    : null;
 
   return {
     ...round,
