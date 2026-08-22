@@ -8,6 +8,7 @@ import {
   GreedyRuntimeStatus,
   GreedyClassicRuntimeStatus,
   Lucky77RuntimeStatus,
+  Prisma,
   PrismaClient,
   TeenPattiRuntimeStatus,
 } from '../src/generated/prisma/client';
@@ -22,6 +23,81 @@ if (!database_url) {
 const adapter = new PrismaPg({ connectionString: database_url });
 const prisma = new PrismaClient({ adapter });
 
+const greedy_food_options = [
+  {
+    code: 'HOT_DOG',
+    name: 'Hot dog',
+    image_url: '/assets/greedy/hot-dog.png',
+    display_order: 1,
+    payout_numerator: 10n,
+    payout_denominator: 1n,
+    probability_weight: 45n,
+  },
+  {
+    code: 'KEBAB',
+    name: 'Barbecue kebab',
+    image_url: '/assets/greedy/kebab.png',
+    display_order: 2,
+    payout_numerator: 15n,
+    payout_denominator: 1n,
+    probability_weight: 30n,
+  },
+  {
+    code: 'HAM',
+    name: 'Ham',
+    image_url: '/assets/greedy/ham.png',
+    display_order: 3,
+    payout_numerator: 25n,
+    payout_denominator: 1n,
+    probability_weight: 18n,
+  },
+  {
+    code: 'STEAK',
+    name: 'Grilled steak',
+    image_url: '/assets/greedy/steak.png',
+    display_order: 4,
+    payout_numerator: 45n,
+    payout_denominator: 1n,
+    probability_weight: 10n,
+  },
+  {
+    code: 'CARROT',
+    name: 'Carrot',
+    image_url: '/assets/greedy/carrot.png',
+    display_order: 5,
+    payout_numerator: 5n,
+    payout_denominator: 1n,
+    probability_weight: 90n,
+  },
+  {
+    code: 'CORN',
+    name: 'Corn',
+    image_url: '/assets/greedy/corn.png',
+    display_order: 6,
+    payout_numerator: 5n,
+    payout_denominator: 1n,
+    probability_weight: 90n,
+  },
+  {
+    code: 'CABBAGE',
+    name: 'Cabbage',
+    image_url: '/assets/greedy/cabbage.png',
+    display_order: 7,
+    payout_numerator: 5n,
+    payout_denominator: 1n,
+    probability_weight: 90n,
+  },
+  {
+    code: 'TOMATO',
+    name: 'Tomato',
+    image_url: '/assets/greedy/tomato.png',
+    display_order: 8,
+    payout_numerator: 5n,
+    payout_denominator: 1n,
+    probability_weight: 90n,
+  },
+];
+
 const main = async (): Promise<void> => {
   const currency = await prisma.currency.upsert({
     where: { code: 'COIN' },
@@ -35,135 +111,123 @@ const main = async (): Promise<void> => {
     update: {},
   });
 
-  let greedy_config = await prisma.greedyConfigVersion.findFirst({
-    where: { game_id: game.id, version: 1 },
-    include: { options: true },
-  });
+  const greedy_config = await prisma.$transaction(async (tx) => {
+    const greedy_configs = await tx.greedyConfigVersion.findMany({
+      where: { game_id: game.id },
+      orderBy: { version: 'desc' },
+      include: { options: true, chip_values: true },
+    });
+    const published_greedy_config = greedy_configs.find(
+      (config) => config.status === ConfigVersionStatus.published,
+    );
+    const existing_food_config = greedy_configs.find(
+      (config) =>
+        config.options.length === greedy_food_options.length &&
+        greedy_food_options.every((seeded_option) => {
+          const current_option = config.options.find(
+            (option) => option.display_order === seeded_option.display_order,
+          );
+          return (
+            current_option?.code === seeded_option.code &&
+            current_option.name === seeded_option.name &&
+            current_option.image_url === seeded_option.image_url &&
+            current_option.payout_numerator === seeded_option.payout_numerator &&
+            current_option.payout_denominator === seeded_option.payout_denominator &&
+            current_option.probability_weight === seeded_option.probability_weight &&
+            current_option.is_enabled
+          );
+        }),
+    );
 
-  if (!greedy_config) {
-    greedy_config = await prisma.greedyConfigVersion.create({
+    // Once this seed has been applied, preserve any newer operator-published config.
+    if (existing_food_config) {
+      await tx.greedyRuntimeState.upsert({
+        where: { game_id: game.id },
+        create: {
+          game_id: game.id,
+          active_config_version_id: published_greedy_config?.id ?? null,
+          status: GreedyRuntimeStatus.stopped,
+        },
+        update: {},
+      });
+      return existing_food_config;
+    }
+
+    // Change only the wheel content when upgrading an existing installation.
+    const baseline_config = published_greedy_config ?? greedy_configs[0];
+    const chip_values = baseline_config?.chip_values.length
+      ? baseline_config.chip_values.map((chip) => ({
+          amount: chip.amount,
+          display_order: chip.display_order,
+          is_enabled: chip.is_enabled,
+        }))
+      : [
+          { amount: 10n, display_order: 1, is_enabled: true },
+          { amount: 50n, display_order: 2, is_enabled: true },
+          { amount: 100n, display_order: 3, is_enabled: true },
+          { amount: 500n, display_order: 4, is_enabled: true },
+          { amount: 1000n, display_order: 5, is_enabled: true },
+          { amount: 5000n, display_order: 6, is_enabled: true },
+        ];
+    let greedy_config = await tx.greedyConfigVersion.create({
       data: {
         game_id: game.id,
-        version: 1,
+        version: (greedy_configs[0]?.version ?? 0) + 1,
         status: ConfigVersionStatus.draft,
-        betting_duration_ms: 15000,
-        lock_duration_ms: 1000,
-        drawing_duration_ms: 4000,
-        result_duration_ms: 3000,
-        min_bet: 10n,
-        max_single_bet: 10000n,
-        max_round_bet: 50000n,
+        betting_duration_ms: baseline_config?.betting_duration_ms ?? 15000,
+        lock_duration_ms: baseline_config?.lock_duration_ms ?? 1000,
+        drawing_duration_ms: baseline_config?.drawing_duration_ms ?? 4000,
+        result_duration_ms: baseline_config?.result_duration_ms ?? 3000,
+        min_bet: baseline_config?.min_bet ?? 10n,
+        max_single_bet: baseline_config?.max_single_bet ?? 10000n,
+        max_round_bet: baseline_config?.max_round_bet ?? 50000n,
         notes:
-          'Technical baseline. Replace names/images/economy before public launch.',
-        chip_values: {
-          create: [
-            { amount: 10n, display_order: 1 },
-            { amount: 50n, display_order: 2 },
-            { amount: 100n, display_order: 3 },
-            { amount: 500n, display_order: 4 },
-            { amount: 1000n, display_order: 5 },
-            { amount: 5000n, display_order: 6 },
-          ],
-        },
-        options: {
-          create: [
-            {
-              code: 'HOT_DOG',
-              name: 'Hot dog',
-              display_order: 1,
-              payout_numerator: 4n,
-              payout_denominator: 1n,
-              probability_weight: 210n,
-            },
-            {
-              code: 'KEBAB',
-              name: 'Barbecue kebab',
-              display_order: 2,
-              payout_numerator: 5n,
-              payout_denominator: 1n,
-              probability_weight: 168n,
-            },
-            {
-              code: 'HAM',
-              name: 'Ham',
-              display_order: 3,
-              payout_numerator: 6n,
-              payout_denominator: 1n,
-              probability_weight: 140n,
-            },
-            {
-              code: 'STEAK',
-              name: 'Grilled steak',
-              display_order: 4,
-              payout_numerator: 7n,
-              payout_denominator: 1n,
-              probability_weight: 120n,
-            },
-            {
-              code: 'CARROT',
-              name: 'Carrot',
-              display_order: 5,
-              payout_numerator: 8n,
-              payout_denominator: 1n,
-              probability_weight: 105n,
-            },
-            {
-              code: 'CORN',
-              name: 'Corn',
-              display_order: 6,
-              payout_numerator: 10n,
-              payout_denominator: 1n,
-              probability_weight: 84n,
-            },
-            {
-              code: 'CABBAGE',
-              name: 'Cabbage',
-              display_order: 7,
-              payout_numerator: 15n,
-              payout_denominator: 1n,
-              probability_weight: 56n,
-            },
-            {
-              code: 'TOMATO',
-              name: 'Tomato',
-              display_order: 8,
-              payout_numerator: 20n,
-              payout_denominator: 1n,
-              probability_weight: 42n,
-            },
-          ],
-        },
+          'Greedy food wheel baseline. Screenshot order with equalized 97.19% theoretical return per option.',
+        chip_values: { create: chip_values },
+        options: { create: greedy_food_options },
       },
-      include: { options: true },
     });
 
-    greedy_config = await prisma.greedyConfigVersion.update({
+    greedy_config = await tx.greedyConfigVersion.update({
       where: { id: greedy_config.id },
       data: { status: ConfigVersionStatus.review_pending },
-      include: { options: true },
     });
-    greedy_config = await prisma.greedyConfigVersion.update({
+
+    const published_at = new Date();
+    await tx.greedyConfigVersion.updateMany({
+      where: {
+        game_id: game.id,
+        status: ConfigVersionStatus.published,
+        id: { not: greedy_config.id },
+      },
+      data: {
+        status: ConfigVersionStatus.retired,
+        retired_at: published_at,
+      },
+    });
+    greedy_config = await tx.greedyConfigVersion.update({
       where: { id: greedy_config.id },
       data: {
         status: ConfigVersionStatus.published,
-        published_at: new Date(),
+        published_at,
       },
-      include: { options: true },
     });
-  }
 
-  await prisma.greedyRuntimeState.upsert({
-    where: { game_id: game.id },
-    create: {
-      game_id: game.id,
-      active_config_version_id: greedy_config.id,
-      status: GreedyRuntimeStatus.stopped,
-    },
-    update: {
-      active_config_version_id: greedy_config.id,
-    },
+    await tx.greedyRuntimeState.upsert({
+      where: { game_id: game.id },
+      create: {
+        game_id: game.id,
+        active_config_version_id: greedy_config.id,
+        status: GreedyRuntimeStatus.stopped,
+      },
+      update: {
+        active_config_version_id: greedy_config.id,
+      },
+    });
+    return greedy_config;
+  }, {
+    isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
   });
-
 
   const greedy_classic_game = await prisma.game.upsert({
     where: { code: 'GREEDY_CLASSIC' },
