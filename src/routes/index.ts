@@ -6,6 +6,7 @@ import { GreedyClassicRoutes } from '@/modules/greedy-classic/greedy-classic.rou
 import { WalletRoutes, WalletAdminRoutes } from '@/modules/wallet/wallet.routes';
 import { GameAdminRoutes } from '@/modules/game-admin/game-admin.routes';
 import { PlatformAppRoutes } from '@/modules/platform-app/platform-app.routes';
+import { PlatformUserRoutes } from '@/modules/platform-user/platform-user.routes';
 import { PlatformIntegrationRoutes } from '@/modules/platform-integration/platform-integration.routes';
 import AdminRoutes from '@/modules/admin/admin.routes';
 import prisma from '@/lib/prisma';
@@ -42,6 +43,7 @@ router.use('/wallets', WalletRoutes);
 router.use('/admin/wallets', WalletAdminRoutes);
 router.use('/admin/games', GameAdminRoutes);
 router.use('/admin/platform-apps', PlatformAppRoutes);
+router.use('/admin/platform-users', PlatformUserRoutes);
 router.use('/admin', AdminRoutes);
 
 export default router;
