@@ -2,6 +2,23 @@ import { z } from 'zod';
 
 const positiveIntegerString = z.string().regex(/^[1-9]\d*$/);
 
+const emptyToNull = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((value) => (value === '' ? null : value), schema);
+
+/** Absolute CDN URLs and legacy static paths such as `/assets/greedy/hot-dog.png`. */
+const optionImageUrlSchema = z.union([
+  z.string().trim().url(),
+  z.string().trim().regex(/^\/[^\s]+$/),
+]).optional().nullable();
+
+const optionAssetIdSchema = emptyToNull(z.string().trim().cuid().nullable().optional());
+
+const optionalNotesSchema = z.preprocess(
+  (value) => (value === '' || value === null ? undefined : value),
+  z.string().trim().max(500).optional(),
+);
+
+export const isLegacyOptionImageUrl = (value: string) => value.startsWith('/');
 
 const chipValueSchema = z.object({
   amount: positiveIntegerString,
@@ -12,8 +29,8 @@ const chipValueSchema = z.object({
 const optionSchema = z.object({
   code: z.string().trim().min(2).max(50).regex(/^[A-Z0-9_]+$/),
   name: z.string().trim().min(1).max(100),
-  image_url: z.string().trim().url().optional().nullable(),
-  asset_id: z.string().trim().cuid().optional().nullable(),
+  image_url: optionImageUrlSchema,
+  asset_id: optionAssetIdSchema,
   display_order: z.number().int().min(1).max(100),
   payout_numerator: positiveIntegerString,
   payout_denominator: positiveIntegerString.default('1'),
@@ -31,7 +48,7 @@ export const createGreedyConfigSchema = z.object({
       min_bet: positiveIntegerString,
       max_single_bet: positiveIntegerString,
       max_round_bet: positiveIntegerString,
-      notes: z.string().trim().max(500).optional(),
+      notes: optionalNotesSchema,
       chip_values: z.array(chipValueSchema).min(1).max(12),
       options: z.array(optionSchema).length(8),
     })
@@ -116,7 +133,7 @@ export const createLucky77ConfigSchema = z.object({
       min_bet: positiveIntegerString,
       max_single_bet: positiveIntegerString,
       max_round_bet: positiveIntegerString,
-      notes: z.string().trim().max(500).optional(),
+      notes: optionalNotesSchema,
       chip_values: z.array(chipValueSchema).min(1).max(12),
       options: z.array(optionSchema).length(3),
     })
@@ -180,8 +197,8 @@ export type CreateLucky77ConfigBody = z.infer<typeof createLucky77ConfigSchema>[
 const teenPattiOptionSchema = z.object({
   code: z.string().trim().min(2).max(50).regex(/^[A-Z0-9_]+$/),
   name: z.string().trim().min(1).max(100),
-  image_url: z.string().trim().url().optional().nullable(),
-  asset_id: z.string().trim().cuid().optional().nullable(),
+  image_url: optionImageUrlSchema,
+  asset_id: optionAssetIdSchema,
   display_order: z.number().int().min(1).max(100),
   is_enabled: z.boolean().default(true),
 });
@@ -197,7 +214,7 @@ export const createTeenPattiConfigSchema = z.object({
       max_single_bet: positiveIntegerString,
       max_round_bet: positiveIntegerString,
       rake_bps: z.number().int().min(0).max(2000),
-      notes: z.string().trim().max(500).optional(),
+      notes: optionalNotesSchema,
       chip_values: z.array(chipValueSchema).min(1).max(12),
       options: z.array(teenPattiOptionSchema).length(3),
     })

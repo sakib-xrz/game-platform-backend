@@ -118,7 +118,9 @@ const validateConfig = async (payload: CreateLucky77ConfigBody) => {
     const payout_contribution_percent = total_weight ? Number((weight * numerator * 1_000_000n) / (total_weight * denominator)) / 10_000 : 0;
     return { code: option.code, probability_percent, payout_contribution_percent };
   });
-  const theoretical_return_percent = options.reduce((sum, option) => sum + option.payout_contribution_percent, 0);
+  const theoretical_return_percent = options.length
+    ? Math.max(...options.map((option) => option.payout_contribution_percent))
+    : 0;
   const asset_ids = [...new Set(payload.options.flatMap((option) => option.asset_id ? [option.asset_id] : []))];
   const assets = asset_ids.length ? await prisma.adminAsset.findMany({ where: { id: { in: asset_ids }, status: AdminAssetStatus.ready }, select: { id: true, cdn_url: true } }) : [];
   const ready_assets = new Map(assets.map((asset) => [asset.id, asset]));
@@ -126,7 +128,7 @@ const validateConfig = async (payload: CreateLucky77ConfigBody) => {
     if (option.image_url && !option.asset_id) failures.push({ field: `options.${option.code}.image_url`, message: 'Option artwork must come from a managed asset' });
     if (option.asset_id && (!ready_assets.has(option.asset_id) || !ready_assets.get(option.asset_id)?.cdn_url)) failures.push({ field: `options.${option.code}.asset_id`, message: 'Referenced managed asset is not ready' });
   });
-  if (theoretical_return_percent > 100) failures.push({ field: 'options', message: 'Weighted theoretical return exceeds 100%' });
+  if (theoretical_return_percent > 100) failures.push({ field: 'options', message: 'An enabled option exceeds 100% theoretical return' });
   return {
     valid: theoretical_return_percent <= 100 && enabled.length === 3 && failures.length === 0,
     failures,

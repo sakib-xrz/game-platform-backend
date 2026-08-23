@@ -14,7 +14,7 @@ const actorRole = (req: Request): AdminRole | undefined => req.admin?.role;
 const send = (res: Response, data: unknown, message: string, statusCode: number = httpStatus.OK) => sendResponse(res, { statusCode, success: true, message, data });
 
 const getConfig = catchAsync(async (req, res) => send(res, await GreedyAdminOpsService.getConfig(String(req.params.config_id)), 'Greedy config fetched'));
-const updateDraft = catchAsync(async (req, res) => send(res, await GreedyAdminOpsService.updateDraft(String(req.params.config_id), req.body as CreateGreedyConfigBody, requestAuditContext(req)), 'Greedy config draft updated'));
+const updateDraft = catchAsync(async (req, res) => send(res, await GreedyAdminOpsService.updateDraft(String(req.params.config_id), req.body as CreateGreedyConfigBody, requestAuditContext(req)), 'Greedy config updated'));
 const cloneConfig = catchAsync(async (req, res) => send(res, await GreedyAdminOpsService.cloneConfig(String(req.params.config_id), requestAuditContext(req)), 'Greedy config draft cloned', httpStatus.CREATED));
 const listRounds = catchAsync(async (req, res) => {
   const result = await GreedyAdminOpsService.listRounds(req.query as unknown as OpsRoundListQuery, actorRole(req));
