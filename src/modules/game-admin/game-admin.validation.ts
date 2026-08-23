@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TEEN_PATTI_MIN_RESULT_DURATION_MS } from '@/modules/teen-patti/teen-patti.constant';
 
 const positiveIntegerString = z.string().regex(/^[1-9]\d*$/);
 
@@ -209,7 +210,10 @@ export const createTeenPattiConfigSchema = z.object({
       betting_duration_ms: z.number().int().min(3000).max(120000),
       lock_duration_ms: z.number().int().min(250).max(10000),
       drawing_duration_ms: z.number().int().min(1000).max(30000),
-      result_duration_ms: z.number().int().min(1000).max(30000),
+      // The player experience reserves ~3s for reveal/winner/payout motion and
+      // at least 1.6s for the readable result sheet. Keep a small scheduling
+      // margin so a valid config cannot close the round mid-animation.
+      result_duration_ms: z.number().int().min(TEEN_PATTI_MIN_RESULT_DURATION_MS).max(30000),
       min_bet: positiveIntegerString,
       max_single_bet: positiveIntegerString,
       max_round_bet: positiveIntegerString,
@@ -236,6 +240,16 @@ export const createTeenPattiConfigSchema = z.object({
       if (chip_orders.size !== value.chip_values.length) {
         ctx.addIssue({ code: 'custom', path: ['chip_values'], message: 'Chip display_order values must be unique' });
       }
+      value.chip_values.forEach((chip, index) => {
+        const amount = BigInt(chip.amount);
+        if (chip.is_enabled && (amount < min_bet || amount > max_single_bet)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['chip_values', index, 'amount'],
+            message: 'Enabled chip amount must be between min_bet and max_single_bet',
+          });
+        }
+      });
 
       const codes = new Set(value.options.map((item) => item.code));
       const orders = new Set(value.options.map((item) => item.display_order));

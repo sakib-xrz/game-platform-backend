@@ -20,11 +20,20 @@ import {
   TEEN_PATTI_CURRENCY_CODE,
   TEEN_PATTI_GAME_CODE,
   TEEN_PATTI_IDEMPOTENCY_SCOPE,
+  TEEN_PATTI_SOCKET_ROOM,
 } from './teen-patti.constant';
-import type { BetResponse } from './teen-patti.types';
+import type {
+  BetResponse,
+  TeenPattiBettorAggregate,
+} from './teen-patti.types';
 import type { PlaceBetBody } from './teen-patti.validation';
 import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
 import { randomUUID } from 'node:crypto';
+import {
+  buildTeenPattiBetPlacedPayload,
+  buildTeenPattiPreview,
+} from './teen-patti.public';
+import { effectiveTeenPattiResultDurationMs } from './teen-patti.config';
 
 const public_result_statuses: TeenPattiRoundStatus[] = [
   TeenPattiRoundStatus.result_revealed,
@@ -76,12 +85,23 @@ const publicResultSelect = {
   id: true,
   round_id: true,
   algorithm_version: true,
+  config_version_id: true,
+  entropy_digest: true,
+  audit_hash: true,
   generated_at: true,
   revealed_at: true,
   deal_attempt_count: true,
   hands: true,
   winning_option: { select: publicOptionSelect },
 } satisfies Prisma.TeenPattiRoundResultSelect;
+
+const decoratePublicResult = <T extends { audit_hash: string }>(
+  result: T | null,
+) => {
+  if (!result) return null;
+  const { audit_hash, ...public_result } = result;
+  return { ...public_result, result_commitment: audit_hash };
+};
 
 const requestHash = (payload: PlaceBetBody): string =>
   sha256(
@@ -93,17 +113,24 @@ const requestHash = (payload: PlaceBetBody): string =>
     ].join('|'),
   );
 
-const getSnapshot = async (user_id: string) => {
+const getSnapshotFromTransaction = async (
+  user_id: string,
+  tx: Prisma.TransactionClient,
+) => {
   const [
+    server_time_rows,
     game,
     wallet,
     current_bets,
-    current_option_pot_totals,
+    current_bettor_groups,
     history_candidates,
     config_candidates,
     current_result_candidate,
   ] = await Promise.all([
-    prisma.game.findUnique({
+    tx.$queryRaw<Array<{ server_time: Date }>>(
+      Prisma.sql`SELECT CURRENT_TIMESTAMP AS server_time`,
+    ),
+    tx.game.findUnique({
       where: { code: TEEN_PATTI_GAME_CODE },
       select: {
         id: true,
@@ -131,8 +158,8 @@ const getSnapshot = async (user_id: string) => {
         },
       },
     }),
-    ensureWallet(user_id),
-    prisma.teenPattiBet.findMany({
+    ensureWallet(user_id, tx),
+    tx.teenPattiBet.findMany({
       where: {
         user_id,
         round: {
@@ -144,6 +171,7 @@ const getSnapshot = async (user_id: string) => {
         id: true,
         round_id: true,
         amount: true,
+        client_request_id: true,
         accepted_at: true,
         option: { select: publicOptionSelect },
         settlement: {
@@ -156,8 +184,8 @@ const getSnapshot = async (user_id: string) => {
       },
       orderBy: { created_at: 'asc' },
     }),
-    prisma.teenPattiBet.groupBy({
-      by: ['round_id', 'option_version_id'],
+    tx.teenPattiBet.groupBy({
+      by: ['round_id', 'option_version_id', 'user_id'],
       where: {
         round: {
           game: { code: TEEN_PATTI_GAME_CODE },
@@ -165,8 +193,11 @@ const getSnapshot = async (user_id: string) => {
         },
       },
       _sum: { amount: true },
+      _count: { _all: true },
+      _min: { accepted_at: true },
+      _max: { accepted_at: true },
     }),
-    prisma.teenPattiRound.findMany({
+    tx.teenPattiRound.findMany({
       where: {
         game: { code: TEEN_PATTI_GAME_CODE },
         status: { in: public_result_statuses },
@@ -183,7 +214,7 @@ const getSnapshot = async (user_id: string) => {
       orderBy: { round_number: 'desc' },
       take: 21,
     }),
-    prisma.teenPattiConfigVersion.findMany({
+    tx.teenPattiConfigVersion.findMany({
       where: {
         OR: [
           {
@@ -203,7 +234,7 @@ const getSnapshot = async (user_id: string) => {
       },
       select: publicConfigSelect,
     }),
-    prisma.teenPattiRoundResult.findFirst({
+    tx.teenPattiRoundResult.findFirst({
       where: {
         round: {
           game: { code: TEEN_PATTI_GAME_CODE },
@@ -213,6 +244,9 @@ const getSnapshot = async (user_id: string) => {
       select: publicResultSelect,
     }),
   ]);
+
+  const server_time = server_time_rows[0]?.server_time;
+  if (!server_time) throw new Error('Database time unavailable');
 
   if (
     !game ||
@@ -235,7 +269,7 @@ const getSnapshot = async (user_id: string) => {
     (config_id) => !config_versions.some((config) => config.id === config_id),
   );
   if (missing_config_ids.length) {
-    const fallback_configs = await prisma.teenPattiConfigVersion.findMany({
+    const fallback_configs = await tx.teenPattiConfigVersion.findMany({
       where: { id: { in: missing_config_ids } },
       select: publicConfigSelect,
     });
@@ -260,14 +294,36 @@ const getSnapshot = async (user_id: string) => {
   const my_bets = current_round
     ? current_bets.filter((bet) => bet.round_id === current_round.id)
     : [];
-  const option_pot_totals = current_round
-    ? current_option_pot_totals.filter(
-        (row) => row.round_id === current_round.id,
-      )
-    : [];
   const history = history_candidates
     .filter((round) => round.id !== current_round?.id)
     .slice(0, 20);
+  const history_round_ids = history.map((round) => round.id);
+  const [history_bet_groups, history_payout_groups] = history_round_ids.length
+    ? await Promise.all([
+        tx.teenPattiBet.groupBy({
+          by: ['round_id'],
+          where: { round_id: { in: history_round_ids } },
+          _sum: { amount: true },
+        }),
+        tx.teenPattiUserPayout.groupBy({
+          by: ['round_id'],
+          where: { round_id: { in: history_round_ids } },
+          _sum: { total_payout: true },
+        }),
+      ])
+    : [[], []];
+  const history_bet_totals = new Map(
+    history_bet_groups.map((group) => [
+      group.round_id,
+      group._sum.amount ?? 0n,
+    ]),
+  );
+  const history_payout_totals = new Map(
+    history_payout_groups.map((group) => [
+      group.round_id,
+      group._sum.total_payout ?? 0n,
+    ]),
+  );
 
   const result_is_public = current_round
     ? public_result_statuses.includes(current_round.status)
@@ -277,14 +333,67 @@ const getSnapshot = async (user_id: string) => {
       ? current_result_candidate
       : null;
   if (current_round && result_is_public && !current_result) {
-    current_result = await prisma.teenPattiRoundResult.findUnique({
+    current_result = await tx.teenPattiRoundResult.findUnique({
       where: { round_id: current_round.id },
       select: publicResultSelect,
     });
   }
 
+  const bettors: TeenPattiBettorAggregate[] = current_round
+    ? current_bettor_groups
+        .filter(
+          (group) =>
+            group.round_id === current_round.id &&
+            group._sum.amount !== null &&
+            group._min.accepted_at !== null &&
+            group._max.accepted_at !== null,
+        )
+        .map((group) => ({
+          round_id: group.round_id,
+          option_id: group.option_version_id,
+          user_id: group.user_id,
+          display_name: null,
+          avatar_url: null,
+          total_amount: group._sum.amount!.toString(),
+          bet_count: group._count._all,
+          first_bet_at: group._min.accepted_at!.toISOString(),
+          last_bet_at: group._max.accepted_at!.toISOString(),
+        }))
+        .sort((left, right) => {
+          const recent_difference =
+            Date.parse(right.last_bet_at) - Date.parse(left.last_bet_at);
+          if (recent_difference !== 0) return recent_difference;
+          if (left.option_id !== right.option_id) {
+            return left.option_id < right.option_id ? -1 : 1;
+          }
+          return left.user_id < right.user_id
+            ? -1
+            : left.user_id > right.user_id
+              ? 1
+              : 0;
+        })
+    : [];
+  const option_pot_totals = new Map<string, bigint>();
+  for (const bettor of bettors) {
+    option_pot_totals.set(
+      bettor.option_id,
+      (option_pot_totals.get(bettor.option_id) ?? 0n) +
+        BigInt(bettor.total_amount),
+    );
+  }
+  const player_count = new Set(bettors.map((bettor) => bettor.user_id)).size;
+  const round_bet_count = bettors.reduce(
+    (total, bettor) => total + bettor.bet_count,
+    0,
+  );
+  const preview =
+    current_round && current_result
+      ? buildTeenPattiPreview(current_result)
+      : { preview_cards: [], result_commitment: null };
+
   return {
-    server_time: new Date(),
+    server_time,
+    player: { user_id, display_name: null, avatar_url: null },
     game: { code: game.code, name: game.name, status: game.status },
     runtime: {
       status: game.teen_patti_runtime_state.status,
@@ -306,24 +415,54 @@ const getSnapshot = async (user_id: string) => {
           lock_duration_ms: current_config!.lock_duration_ms,
           drawing_duration_ms:
             current_config!.drawing_duration_ms,
-          result_duration_ms: current_config!.result_duration_ms,
+          result_duration_ms: effectiveTeenPattiResultDurationMs(
+            current_config!.result_duration_ms,
+          ),
           min_bet: current_config!.min_bet,
           max_single_bet: current_config!.max_single_bet,
           max_round_bet: current_config!.max_round_bet,
           options: current_config!.options,
           chip_values: current_config!.chip_values,
           rake_bps: current_config!.rake_bps,
-          option_pot_totals: option_pot_totals.map((row) => ({
-            option_id: row.option_version_id,
-            total_amount: (row._sum.amount ?? 0n).toString(),
-          })),
-          result: result_is_public ? current_result : null,
+          bettors,
+          player_count,
+          round_bet_count,
+          option_pot_totals: [...option_pot_totals.entries()].map(
+            ([option_id, total_amount]) => ({
+              option_id,
+              total_amount: total_amount.toString(),
+            }),
+          ),
+          preview_cards: preview.preview_cards,
+          result_commitment: preview.result_commitment,
+          result: result_is_public
+            ? decoratePublicResult(current_result)
+            : null,
         }
       : null,
     wallet,
     my_bets,
-    recent_history: history,
+    recent_history: history.map((round) => ({
+      ...round,
+      total_bet_amount: (
+        history_bet_totals.get(round.id) ?? 0n
+      ).toString(),
+      total_payout_amount: (
+        history_payout_totals.get(round.id) ?? 0n
+      ).toString(),
+      result: decoratePublicResult(round.result),
+    })),
   };
+};
+
+const getSnapshot = async (user_id: string) => {
+  // Initialize a first-time wallet outside the read-only snapshot transaction,
+  // then read it again inside the same MVCC view as bets and aggregates.
+  await ensureWallet(user_id);
+  return prisma.$transaction(
+    (tx) => getSnapshotFromTransaction(user_id, tx),
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
 };
 
 const placeBetTransaction = async (
@@ -402,6 +541,7 @@ const placeBetTransaction = async (
         betting_ends_at: Date | null;
         server_now: Date;
         option_id: string | null;
+        enabled_chip_amount: bigint | null;
         min_bet: bigint;
         max_single_bet: bigint;
         max_round_bet: bigint;
@@ -417,6 +557,7 @@ const placeBetTransaction = async (
         game_round.betting_ends_at,
         CURRENT_TIMESTAMP AS server_now,
         betting_option.id AS option_id,
+        enabled_chip.amount AS enabled_chip_amount,
         config.min_bet,
         config.max_single_bet,
         config.max_round_bet
@@ -430,6 +571,10 @@ const placeBetTransaction = async (
         ON betting_option.id = ${payload.option_id}
         AND betting_option.config_version_id = game_round.config_version_id
         AND betting_option.is_enabled = TRUE
+      LEFT JOIN teen_patti_chip_value_versions AS enabled_chip
+        ON enabled_chip.config_version_id = game_round.config_version_id
+        AND enabled_chip.amount = ${amount}
+        AND enabled_chip.is_enabled = TRUE
       WHERE game_round.id = ${payload.round_id}
       FOR SHARE OF game_round
     `);
@@ -459,6 +604,13 @@ const placeBetTransaction = async (
       throw new AppError(httpStatus.BAD_REQUEST, 'Invalid betting deck');
     }
 
+    if (barrier.enabled_chip_amount === null) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        'Bet amount is not an enabled chip denomination',
+      );
+    }
+
     if (amount < barrier.min_bet || amount > barrier.max_single_bet) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
@@ -474,23 +626,6 @@ const placeBetTransaction = async (
       throw new AppError(
         httpStatus.BAD_REQUEST,
         'Maximum round bet limit exceeded',
-      );
-    }
-
-    // One selection per round: a user may stack more chips on the deck they
-    // already backed, but may not spread bets across multiple decks.
-    const conflicting_bet = await tx.teenPattiBet.findFirst({
-      where: {
-        round_id: barrier.id,
-        user_id,
-        option_version_id: { not: barrier.option_id },
-      },
-      select: { id: true },
-    });
-    if (conflicting_bet) {
-      throw new AppError(
-        httpStatus.CONFLICT,
-        'You can back only one hand per round',
       );
     }
 
@@ -573,6 +708,41 @@ const placeBetTransaction = async (
         wallet_debit_ledger_id: ledger.id,
       },
     });
+    const bettor_option_aggregate = await tx.teenPattiBet.aggregate({
+      where: {
+        round_id: barrier.id,
+        option_version_id: barrier.option_id,
+        user_id,
+      },
+      _sum: { amount: true },
+      _count: { _all: true },
+      _min: { accepted_at: true },
+      _max: { accepted_at: true },
+    });
+    const option_aggregate = await tx.teenPattiBet.aggregate({
+      where: {
+        round_id: barrier.id,
+        option_version_id: barrier.option_id,
+      },
+      _sum: { amount: true },
+    });
+    const round_aggregate = await tx.teenPattiBet.aggregate({
+      where: { round_id: barrier.id },
+      _count: { _all: true },
+    });
+    const round_players = await tx.teenPattiBet.findMany({
+      where: { round_id: barrier.id },
+      distinct: ['user_id'],
+      select: { user_id: true },
+    });
+    if (
+      bettor_option_aggregate._sum.amount === null ||
+      bettor_option_aggregate._min.accepted_at === null ||
+      bettor_option_aggregate._max.accepted_at === null ||
+      option_aggregate._sum.amount === null
+    ) {
+      throw new Error('Accepted Teen Patti bet aggregate is unavailable');
+    }
 
     const response: BetResponse = {
       bet_id: bet.id,
@@ -584,6 +754,23 @@ const placeBetTransaction = async (
       wallet_version: debited_wallet.version,
       accepted_at: bet.accepted_at.toISOString(),
     };
+    const public_bet_event = buildTeenPattiBetPlacedPayload(
+      {
+        id: bet.id,
+        round_id: barrier.id,
+        option_id: barrier.option_id,
+        amount,
+        accepted_at: bet.accepted_at,
+        user_total_amount: bettor_option_aggregate._sum.amount,
+        option_total_amount: option_aggregate._sum.amount,
+        bet_count: bettor_option_aggregate._count._all,
+        first_bet_at: bettor_option_aggregate._min.accepted_at,
+        last_bet_at: bettor_option_aggregate._max.accepted_at,
+        player_count: round_players.length,
+        round_bet_count: round_aggregate._count._all,
+      },
+      user_id,
+    );
 
     await tx.idempotencyRecord.update({
       where: {
@@ -608,6 +795,13 @@ const placeBetTransaction = async (
           event_type: 'teen_patti.bet.accepted',
           socket_room: `user:${user_id}`,
           payload: toJsonSafe(response) as Prisma.InputJsonValue,
+        },
+        {
+          aggregate_type: 'teen_patti_bet',
+          aggregate_id: bet.id,
+          event_type: 'teen_patti.bet.placed',
+          socket_room: TEEN_PATTI_SOCKET_ROOM,
+          payload: toJsonSafe(public_bet_event) as Prisma.InputJsonValue,
         },
         {
           aggregate_type: 'wallet',
@@ -721,7 +915,14 @@ const getRoundHistory = async (page = 1, limit = 20) => {
     }),
     prisma.teenPattiRound.count({ where }),
   ]);
-  return { items, total, ...pagination };
+  return {
+    items: items.map((round) => ({
+      ...round,
+      result: decoratePublicResult(round.result),
+    })),
+    total,
+    ...pagination,
+  };
 };
 
 const getRound = async (round_id: string) => {
@@ -751,7 +952,16 @@ const getRound = async (round_id: string) => {
 
   const result_is_public = public_result_statuses.includes(round.status);
 
-  return { ...round, result: result_is_public ? round.result : null };
+  const preview = round.result
+    ? buildTeenPattiPreview(round.result)
+    : { preview_cards: [], result_commitment: null };
+
+  return {
+    ...round,
+    preview_cards: preview.preview_cards,
+    result_commitment: preview.result_commitment,
+    result: result_is_public ? decoratePublicResult(round.result) : null,
+  };
 };
 
 const TeenPattiService = {

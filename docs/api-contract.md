@@ -66,15 +66,30 @@ Round details. Result is withheld until public reveal.
 
 ## Teen Patti player/game
 
-Global rounds with three decks. Players may bet on one, two, or all three. After lock the server deals 3×3 cards; the highest Teen Patti hand wins. Winning-deck bets split the round pot minus `rake_bps`. Cards and winner stay hidden until reveal. Integer leftover from the split stays with the house. If nobody bet the winner, the pot stays with the house.
+Global rounds with three hands. Each round is authoritatively predealt before it opens. One real committed card per hand is public during betting; the remaining two cards, hand ranks, and winner stay hidden until reveal. The highest Teen Patti hand wins. Winning-hand bets split the round pot minus `rake_bps`. Integer leftover from the split stays with the house. If nobody bet the winner, the pot stays with the house.
 
 ### GET `/games/teen-patti/snapshot`
 
-Same snapshot shape as Greedy, plus `rake_bps` and (after reveal) `result.hands`.
+Same base snapshot shape as Greedy, plus:
+
+- top-level `player: { user_id, display_name, avatar_url }`, with both profile fields currently `null` until a trusted player profile integration exists;
+- `round.preview_cards`, containing exactly `{ option_id, card }` for the first real card of each hand;
+- `round.result_commitment`, the immutable predeal audit hash;
+- `round.bettors`, one public aggregate per round/option/user with nullable profile fields, `total_amount`, `bet_count`, `first_bet_at`, and `last_bet_at`;
+- `round.player_count`, the distinct bettor count across every hand;
+- `round.round_bet_count`, the total accepted tap count across every hand and bettor, used as the reconnect/event reconciliation watermark;
+- `round.option_pot_totals`, the aggregate stake per hand;
+- `rake_bps` and, only after reveal, the complete `result.hands`, winning hand, audit metadata, and matching `result_commitment`.
+
+The snapshot is authoritative after initial load or reconnect. Before reveal, `round.result` is always `null`; neither hidden cards, categories/rank keys, nor the winner are returned. `preview_cards` is only a deliberate one-card projection of the committed deal.
+
+Each private `my_bets` row includes its original `client_request_id`, allowing the authenticated client to reconcile transport-uncertain submissions after a snapshot refresh. Each `recent_history` row includes required decimal-string `total_bet_amount` across all accepted taps and `total_payout_amount` across all recorded winner credits; a round with no corresponding rows returns `"0"`.
 
 ### POST `/games/teen-patti/bets`
 
 Same body as Greedy (`round_id`, `option_id` of a deck, `amount`, `client_request_id`).
+
+Every tap is a separate idempotent bet. Until `betting_ends_at`, a user may submit any number of taps on the same hand or different hands, subject to wallet balance and the combined per-user `max_round_bet`. `amount` must exactly match an enabled chip denomination frozen into that round's config; a merely in-range arbitrary or disabled amount is rejected inside the transaction.
 
 ### GET `/games/teen-patti/my-bets?page=1&limit=20`
 

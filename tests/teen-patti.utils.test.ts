@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateHand, uniqueHighestIndex, type CardCode } from '@/modules/teen-patti/teen-patti.rank';
 import { splitPot } from '@/modules/teen-patti/teen-patti.payout';
+import {
+  buildTeenPattiBetPlacedPayload,
+  buildTeenPattiPreview,
+} from '@/modules/teen-patti/teen-patti.public';
+import {
+  buildLegacyTeenPattiResultAuditHash,
+  buildTeenPattiResultCommitment,
+} from '@/modules/teen-patti/teen-patti.audit';
+import { sha256 } from '@/utils/hash';
 
 const hand = (a: CardCode, b: CardCode, c: CardCode) => evaluateHand([a, b, c]);
 
@@ -64,5 +73,176 @@ describe('teen-patti.payout', () => {
     const split = splitPot(2000n, 500, []);
     expect(split.payouts).toEqual([]);
     expect(split.leftover).toBe(1900n);
+  });
+});
+
+describe('teen-patti public projections', () => {
+  it('projects exactly one committed card per hand before reveal', () => {
+    const preview = buildTeenPattiPreview({
+      audit_hash: 'commitment-1',
+      hands: [
+        {
+          option_id: 'hand-a',
+          option_code: 'DECK_A',
+          cards: ['AS', 'KH', 'QD'],
+          category: 'high_card',
+          rank_key: '1:14:13:12',
+        },
+        {
+          option_id: 'hand-b',
+          option_code: 'DECK_B',
+          cards: ['2C', '2H', '9S'],
+          category: 'pair',
+          rank_key: '2:02:09:00',
+        },
+        {
+          option_id: 'hand-c',
+          option_code: 'DECK_C',
+          cards: ['TC', 'JC', 'QC'],
+          category: 'pure_sequence',
+          rank_key: '5:12:00:00',
+        },
+      ],
+    });
+
+    expect(preview).toEqual({
+      preview_cards: [
+        { option_id: 'hand-a', card: 'AS' },
+        { option_id: 'hand-b', card: '2C' },
+        { option_id: 'hand-c', card: 'TC' },
+      ],
+      result_commitment: 'commitment-1',
+    });
+    const serialized = JSON.stringify(preview);
+    expect(serialized).not.toContain('KH');
+    expect(serialized).not.toContain('2H');
+    expect(serialized).not.toContain('JC');
+    expect(serialized).not.toContain('category');
+    expect(serialized).not.toContain('rank_key');
+    expect(serialized).not.toContain('winner');
+  });
+
+  it('builds a wallet-free authoritative public bet event', () => {
+    const event = buildTeenPattiBetPlacedPayload(
+      {
+        id: 'bet-2',
+        round_id: 'round-1',
+        option_id: 'hand-b',
+        amount: 500n,
+        accepted_at: new Date('2026-08-23T00:00:02.000Z'),
+        user_total_amount: 700n,
+        option_total_amount: 1700n,
+        bet_count: 2,
+        first_bet_at: new Date('2026-08-23T00:00:01.000Z'),
+        last_bet_at: new Date('2026-08-23T00:00:02.000Z'),
+        player_count: 3,
+        round_bet_count: 7,
+      },
+      'user-1',
+    );
+
+    expect(event).toEqual({
+      bet_id: 'bet-2',
+      round_id: 'round-1',
+      option_id: 'hand-b',
+      user_id: 'user-1',
+      display_name: null,
+      avatar_url: null,
+      amount: '500',
+      accepted_at: '2026-08-23T00:00:02.000Z',
+      user_total_amount: '700',
+      option_total_amount: '1700',
+      bet_count: 2,
+      first_bet_at: '2026-08-23T00:00:01.000Z',
+      last_bet_at: '2026-08-23T00:00:02.000Z',
+      player_count: 3,
+      round_bet_count: 7,
+    });
+    expect(event).not.toHaveProperty('wallet_balance');
+    expect(event).not.toHaveProperty('client_request_id');
+  });
+
+  it('keeps the predeal commitment stable when JSONB reorders object keys', () => {
+    const common = {
+      round_id: 'round-1',
+      config_version_id: 'config-1',
+      winning_option_id: 'hand-a',
+      algorithm_version: 'teen-patti-predeal-v2',
+      entropy_digest: 'entropy',
+      generated_at: new Date('2026-08-23T00:00:00.000Z'),
+    };
+    const before_persistence = [
+      {
+        option_id: 'hand-a',
+        option_code: 'DECK_A',
+        cards: ['AS', 'KH', 'QD'],
+        category: 'high_card',
+        rank_key: '1:14:13:12',
+      },
+    ];
+    const after_jsonb_persistence = [
+      {
+        cards: ['AS', 'KH', 'QD'],
+        category: 'high_card',
+        rank_key: '1:14:13:12',
+        option_id: 'hand-a',
+        option_code: 'DECK_A',
+      },
+    ];
+
+    expect(
+      buildTeenPattiResultCommitment({
+        ...common,
+        hands: before_persistence,
+      }),
+    ).toBe(
+      buildTeenPattiResultCommitment({
+        ...common,
+        hands: after_jsonb_persistence,
+      }),
+    );
+  });
+
+  it('reconstructs the original v1 hand field order after JSONB persistence', () => {
+    const common = {
+      round_id: 'round-legacy',
+      config_version_id: 'config-legacy',
+      winning_option_id: 'hand-a',
+      algorithm_version: 'teen-patti-deal-v1',
+      entropy_digest: 'legacy-entropy',
+      generated_at: new Date('2026-08-22T00:00:00.000Z'),
+    };
+    const original_hands = [
+      {
+        option_id: 'hand-a',
+        option_code: 'DECK_A',
+        cards: ['AS', 'KH', 'QD'],
+        category: 'high_card',
+        rank_key: '1:14:13:12',
+      },
+    ];
+    const jsonb_hands = [
+      {
+        cards: ['AS', 'KH', 'QD'],
+        category: 'high_card',
+        rank_key: '1:14:13:12',
+        option_id: 'hand-a',
+        option_code: 'DECK_A',
+      },
+    ];
+    const original_hash = sha256(
+      [
+        common.round_id,
+        common.config_version_id,
+        common.winning_option_id,
+        common.algorithm_version,
+        common.entropy_digest,
+        JSON.stringify(original_hands),
+        common.generated_at.toISOString(),
+      ].join('|'),
+    );
+
+    expect(JSON.stringify(jsonb_hands)).not.toBe(JSON.stringify(original_hands));
+    expect(buildLegacyTeenPattiResultAuditHash({ ...common, hands: jsonb_hands })).toBe(original_hash);
   });
 });

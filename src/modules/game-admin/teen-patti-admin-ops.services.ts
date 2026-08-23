@@ -11,8 +11,16 @@ import {
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
-import { TEEN_PATTI_GAME_CODE, TEEN_PATTI_SOCKET_ROOM } from '@/modules/teen-patti/teen-patti.constant';
-import { sha256 } from '@/utils/hash';
+import {
+  TEEN_PATTI_GAME_CODE,
+  TEEN_PATTI_LEGACY_RNG_ALGORITHM_VERSION,
+  TEEN_PATTI_RNG_ALGORITHM_VERSION,
+  TEEN_PATTI_SOCKET_ROOM,
+} from '@/modules/teen-patti/teen-patti.constant';
+import {
+  buildLegacyTeenPattiResultAuditHash,
+  buildTeenPattiResultCommitment,
+} from '@/modules/teen-patti/teen-patti.audit';
 import { deliverOpsWebhook } from '@/modules/admin/admin-webhook';
 import { logger } from '@/utils/logger';
 import { getPagination } from '@/utils/pagination';
@@ -23,6 +31,12 @@ import type { AdminAuditContext } from '@/modules/admin/admin.services';
 import { writeAdminAudit } from '@/modules/admin/admin.services';
 
 const WORKER_LEASE_KEY = 'game-worker:teen-patti';
+const PUBLIC_RESULT_STATUSES: TeenPattiRoundStatus[] = [
+  TeenPattiRoundStatus.result_revealed,
+  TeenPattiRoundStatus.settling,
+  TeenPattiRoundStatus.settled,
+  TeenPattiRoundStatus.closed,
+];
 let lastDatabaseUnavailableWebhookAt = 0;
 const getGameOrThrow = async (tx: Prisma.TransactionClient | typeof prisma = prisma) => {
   const game = await tx.game.findUnique({ where: { code: TEEN_PATTI_GAME_CODE } });
@@ -150,6 +164,14 @@ const stripEntropy = <T extends { result?: { entropy_digest?: string | null } | 
   return { ...item, result: { ...item.result, entropy_digest: undefined } } as T;
 };
 
+const maskUnrevealedResult = <T extends {
+  status: TeenPattiRoundStatus;
+  result?: unknown;
+}>(item: T): T =>
+  PUBLIC_RESULT_STATUSES.includes(item.status)
+    ? item
+    : { ...item, result: null };
+
 const listRounds = async (query: OpsRoundListQuery, role?: AdminRole) => {
   const game = await getGameOrThrow();
   const pagination = getPagination(query.page, query.limit);
@@ -158,7 +180,7 @@ const listRounds = async (query: OpsRoundListQuery, role?: AdminRole) => {
     ...(query.status ? { status: query.status } : {}),
     ...(query.round_number ? { round_number: BigInt(query.round_number) } : {}),
     ...(query.config_version ? { config_version: { version: query.config_version } } : {}),
-    ...(query.winner ? { result: { winning_option: { OR: [{ code: query.winner }, { name: { contains: query.winner, mode: 'insensitive' } }] } } } : {}),
+    ...(query.winner ? { AND: [{ status: { in: PUBLIC_RESULT_STATUSES } }, { result: { winning_option: { OR: [{ code: query.winner }, { name: { contains: query.winner, mode: 'insensitive' } }] } } }] } : {}),
     ...(query.from || query.to ? { created_at: { ...(query.from ? { gte: query.from } : {}), ...(query.to ? { lte: query.to } : {}) } } : {}),
   };
   const [items, total] = await prisma.$transaction([
@@ -175,7 +197,7 @@ const listRounds = async (query: OpsRoundListQuery, role?: AdminRole) => {
     }),
     prisma.teenPattiRound.count({ where }),
   ]);
-  return { items: items.map((item) => stripEntropy(item, role)), total, ...pagination };
+  return { items: items.map((item) => stripEntropy(maskUnrevealedResult(item), role)), total, ...pagination };
 };
 
 const getRound = async (round_id: string, role?: AdminRole) => {
@@ -195,18 +217,24 @@ const getRound = async (round_id: string, role?: AdminRole) => {
     prisma.teenPattiUserRefund.aggregate({ where: { round_id }, _sum: { total_bet_amount: true }, _count: { _all: true } }),
     prisma.teenPattiBetSettlement.groupBy({ by: ['outcome'], where: { round_id }, _count: { _all: true }, _sum: { payout_amount: true } }),
   ]);
-  return { round: stripEntropy(round, role), financials: { bet_count: betTotals._count._all, total_bet_amount: (betTotals._sum.amount ?? 0n).toString(), payout_users: payoutTotals._count._all, total_payout: (payoutTotals._sum.total_payout ?? 0n).toString(), total_winning_stake: (payoutTotals._sum.total_winning_stake ?? 0n).toString(), refund_users: refundTotals._count._all, total_refunded: (refundTotals._sum.total_bet_amount ?? 0n).toString() }, outcomes };
+  return { round: stripEntropy(maskUnrevealedResult(round), role), financials: { bet_count: betTotals._count._all, total_bet_amount: (betTotals._sum.amount ?? 0n).toString(), payout_users: payoutTotals._count._all, total_payout: (payoutTotals._sum.total_payout ?? 0n).toString(), total_winning_stake: (payoutTotals._sum.total_winning_stake ?? 0n).toString(), refund_users: refundTotals._count._all, total_refunded: (refundTotals._sum.total_bet_amount ?? 0n).toString() }, outcomes };
 };
 
 const verifyRoundResult = async (round_id: string, role?: AdminRole) => {
   const game = await getGameOrThrow();
   const round = await prisma.teenPattiRound.findFirst({ where: { id: round_id, game_id: game.id }, include: { result: { include: { winning_option: { select: { id: true, code: true, name: true } } } } } });
   if (!round) throw new AppError(httpStatus.NOT_FOUND, 'Round not found');
+  if (!PUBLIC_RESULT_STATUSES.includes(round.status)) throw new AppError(httpStatus.CONFLICT, 'Round result is hidden until public reveal');
   if (!round.result) throw new AppError(httpStatus.CONFLICT, 'Round has no immutable result to verify');
   const result = round.result;
-  const expected_hash = sha256([round.id, result.config_version_id, result.winning_option_version_id, result.algorithm_version, result.entropy_digest, JSON.stringify(result.hands), result.generated_at.toISOString()].join('|'));
+  const commitment_input = { round_id: round.id, config_version_id: result.config_version_id, winning_option_id: result.winning_option_version_id, algorithm_version: result.algorithm_version, entropy_digest: result.entropy_digest, hands: result.hands, generated_at: result.generated_at };
+  const expected_hash = result.algorithm_version === TEEN_PATTI_RNG_ALGORITHM_VERSION
+    ? buildTeenPattiResultCommitment(commitment_input)
+    : result.algorithm_version === TEEN_PATTI_LEGACY_RNG_ALGORITHM_VERSION
+      ? buildLegacyTeenPattiResultAuditHash(commitment_input)
+      : null;
   const privileged = canViewEntropy(role);
-  return { verified: expected_hash === result.audit_hash, round_id: round.id, result_id: result.id, algorithm_version: result.algorithm_version, generated_at: result.generated_at, revealed_at: result.revealed_at, winning_option: result.winning_option, audit_hash: privileged ? result.audit_hash : undefined, expected_hash: privileged ? expected_hash : undefined };
+  return { verified: expected_hash !== null && expected_hash === result.audit_hash, round_id: round.id, result_id: result.id, algorithm_version: result.algorithm_version, generated_at: result.generated_at, revealed_at: result.revealed_at, winning_option: result.winning_option, audit_hash: privileged ? result.audit_hash : undefined, expected_hash: privileged ? expected_hash : undefined };
 };
 
 const listRoundBets = async (round_id: string, query: OpsRoundBetsQuery) => {
@@ -356,7 +384,7 @@ const getOverview = async () => {
     prisma.teenPattiRuntimeState.findFirst({ where: { game: { code: TEEN_PATTI_GAME_CODE } }, include: { current_round: true, active_config_version: { select: { id: true, version: true, status: true } } } }),
     prisma.teenPattiRound.findMany({ where: { game: { code: TEEN_PATTI_GAME_CODE } }, orderBy: { round_number: 'desc' }, take: 10, select: { id: true, round_number: true, status: true, result: { select: { winning_option: { select: { code: true, name: true, image_url: true } } } }, _count: { select: { bets: true } } } }),
   ]);
-  return { health, runtime, metrics, recent_rounds: recent };
+  return { health, runtime, metrics, recent_rounds: recent.map(maskUnrevealedResult) };
 };
 
 const listAlerts = async (status?: OpsAlertStatus, page = 1, limit = 20) => {

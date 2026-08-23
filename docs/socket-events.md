@@ -112,7 +112,7 @@ New connections join `game:greedy`, `game:teen-patti`, `game:lucky-77`, and `gam
 
 ### `teen_patti.round.opened`
 
-Contains `round_id`, `round_number`, timestamps, `rake_bps`, three public decks, and chip values.
+Contains `round_id`, `round_number`, timestamps, `rake_bps`, three public hands, enabled chip values, `preview_cards` (one real card per hand), and `result_commitment`. It never contains the other six cards, hand ranks, or winner.
 
 ### `teen_patti.round.locked`
 
@@ -120,11 +120,13 @@ Contains `round_id` and `locked_at`.
 
 ### `teen_patti.round.drawing`
 
-Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. Hands and winner are hidden.
+Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. The two remaining cards per hand and winner are still hidden.
 
 ### `teen_patti.round.result`
 
-Emitted only at reveal. Contains the winning deck, the three 3-card hands (`cards`, `category`, `rank_key`), and `revealed_at`.
+Emitted only at reveal. Contains the winning hand, the three 3-card hands (`cards`, `category`, `rank_key`), `revealed_at`, and the audit fields needed to match the previously published `result_commitment`.
+
+For `teen-patti-predeal-v2`, clients can recompute the commitment as SHA-256 of the pipe-joined values `round_id`, `config_version_id`, `winning_option.id`, `algorithm_version`, `entropy_digest`, canonical JSON for `hands` (object keys sorted lexicographically at every level), and `generated_at`, in that exact order. Canonical JSON makes the commitment stable across PostgreSQL JSONB persistence.
 
 ### `teen_patti.round.settled` / `closed` / `cancelled` / `refunded`
 
@@ -133,6 +135,33 @@ Same round-lifecycle meaning as Greedy.
 ### `teen_patti.bet.accepted`
 
 Private `user:<user_id>` notification mirroring the accepted REST bet.
+
+### `teen_patti.bet.placed`
+
+Public `game:teen-patti` notification emitted through the transactional outbox for each accepted tap. `amount` is the individual tap. `user_total_amount` is authoritative for that round/option/user, while `option_total_amount`, `player_count`, and `round_bet_count` are authoritative post-bet public totals. `round_bet_count` counts every accepted tap in the round and is computed after the insert in the same serializable transaction.
+
+```json
+{
+  "event_id": "<outbox-event-id>",
+  "bet_id": "<bet-id>",
+  "round_id": "<round-id>",
+  "option_id": "<hand-id>",
+  "user_id": "user-001",
+  "display_name": null,
+  "avatar_url": null,
+  "amount": "500",
+  "accepted_at": "2026-08-23T00:00:02.000Z",
+  "user_total_amount": "700",
+  "option_total_amount": "1700",
+  "bet_count": 2,
+  "first_bet_at": "2026-08-23T00:00:01.000Z",
+  "last_bet_at": "2026-08-23T00:00:02.000Z",
+  "player_count": 3,
+  "round_bet_count": 9
+}
+```
+
+The public event excludes wallet balance and `client_request_id`. Clients should replace a user/option aggregate only when the incoming `bet_count`/`last_bet_at` is newer. Treat snapshot `round.round_bet_count` as the baseline: ignore events at or below that watermark, accept the next sequential count, and refetch when a higher event exposes a gap. Because active-round bets only add stake, merge `option_total_amount` and `player_count` using the larger value while recovering from event reordering.
 
 ## Lucky 77 events
 

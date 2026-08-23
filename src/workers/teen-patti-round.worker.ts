@@ -16,10 +16,12 @@ import {
   TEEN_PATTI_RNG_ALGORITHM_VERSION,
   TEEN_PATTI_SOCKET_ROOM,
 } from '@/modules/teen-patti/teen-patti.constant';
+import { effectiveTeenPattiResultDurationMs } from '@/modules/teen-patti/teen-patti.config';
 import { dealUniqueWinner } from '@/modules/teen-patti/teen-patti.deal';
 import { splitPot } from '@/modules/teen-patti/teen-patti.payout';
+import { buildTeenPattiPreview } from '@/modules/teen-patti/teen-patti.public';
+import { buildTeenPattiResultCommitment } from '@/modules/teen-patti/teen-patti.audit';
 import { withSerializableRetry } from '@/modules/greedy/greedy.utils';
-import { sha256 } from '@/utils/hash';
 import { logger } from '@/utils/logger';
 
 const SETTLEMENT_BATCH_USERS = 50;
@@ -87,7 +89,22 @@ const createRoundIfNeeded = async (): Promise<void> => {
 
     const round_number = runtime.last_round_number + 1n;
     const config = runtime.active_config_version;
+    if (config.options.length !== 3) {
+      throw new Error('Teen Patti config must have exactly three enabled decks');
+    }
     const betting_ends_at = new Date(database_now.getTime() + config.betting_duration_ms);
+    const deal = dealUniqueWinner(
+      config.options.map((option) => ({ id: option.id, code: option.code })),
+    );
+    const winner = deal.hands[deal.winner_index];
+    if (!winner) throw new Error('Teen Patti deal produced no winner');
+    const hands = deal.hands.map((hand) => ({
+      option_id: hand.option_id,
+      option_code: hand.option_code,
+      cards: hand.cards,
+      category: hand.category,
+      rank_key: hand.rank_key,
+    }));
 
     const round = await tx.teenPattiRound.create({
       data: {
@@ -97,8 +114,32 @@ const createRoundIfNeeded = async (): Promise<void> => {
         status: TeenPattiRoundStatus.betting_open,
         betting_started_at: database_now,
         betting_ends_at,
+        result_generated_at: database_now,
       },
     });
+    const audit_hash = buildTeenPattiResultCommitment({
+      round_id: round.id,
+      config_version_id: config.id,
+      winning_option_id: winner.option_id,
+      algorithm_version: TEEN_PATTI_RNG_ALGORITHM_VERSION,
+      entropy_digest: deal.entropy_digest,
+      hands,
+      generated_at: database_now,
+    });
+    await tx.teenPattiRoundResult.create({
+      data: {
+        round_id: round.id,
+        winning_option_version_id: winner.option_id,
+        algorithm_version: TEEN_PATTI_RNG_ALGORITHM_VERSION,
+        config_version_id: config.id,
+        entropy_digest: deal.entropy_digest,
+        audit_hash,
+        deal_attempt_count: deal.deal_attempt_count,
+        hands,
+        generated_at: database_now,
+      },
+    });
+    const preview = buildTeenPattiPreview({ audit_hash, hands });
 
     await tx.teenPattiRuntimeState.update({
       where: { game_id: game.id },
@@ -120,6 +161,8 @@ const createRoundIfNeeded = async (): Promise<void> => {
           round_number: round_number.toString(),
           betting_started_at: database_now.toISOString(),
           betting_ends_at: betting_ends_at.toISOString(),
+          preview_cards: preview.preview_cards,
+          result_commitment: preview.result_commitment,
           rake_bps: config.rake_bps,
           options: config.options.map((option) => ({
             id: option.id,
@@ -175,7 +218,7 @@ const lockRound = async (round_id: string): Promise<void> => {
   if (locked_at) await cacheRound(round_id);
 };
 
-const generateResult = async (round_id: string): Promise<boolean> => {
+const startDrawingAfterLock = async (round_id: string): Promise<boolean> => {
   const round = await prisma.teenPattiRound.findUnique({
     where: { id: round_id },
     include: {
@@ -185,7 +228,7 @@ const generateResult = async (round_id: string): Promise<boolean> => {
       result: true,
     },
   });
-  if (!round || round.status !== TeenPattiRoundStatus.betting_locked || round.result) return false;
+  if (!round || round.status !== TeenPattiRoundStatus.betting_locked) return false;
   if (!round.locked_at) return false;
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
     Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
@@ -199,56 +242,88 @@ const generateResult = async (round_id: string): Promise<boolean> => {
     return false;
   }
 
-  const options = round.config_version.options;
-  if (options.length !== 3) throw new Error('Teen Patti config must have exactly three enabled decks');
+  // New rounds are predealt atomically when opened so their first card can be
+  // shown during betting. The fallback only recovers a legacy in-flight round
+  // created before that deployment; an existing committed result is never
+  // replaced or re-dealt after bets have been accepted.
+  let legacy_result: {
+    winning_option_version_id: string;
+    entropy_digest: string;
+    audit_hash: string;
+    deal_attempt_count: number;
+    hands: Prisma.InputJsonValue;
+    generated_at: Date;
+  } | null = null;
+  if (!round.result) {
+    const options = round.config_version.options;
+    if (options.length !== 3) {
+      throw new Error('Teen Patti config must have exactly three enabled decks');
+    }
+    const deal = dealUniqueWinner(
+      options.map((option) => ({ id: option.id, code: option.code })),
+    );
+    const winner = deal.hands[deal.winner_index];
+    if (!winner) throw new Error('Teen Patti deal produced no winner');
+    const hands = deal.hands.map((hand) => ({
+      option_id: hand.option_id,
+      option_code: hand.option_code,
+      cards: hand.cards,
+      category: hand.category,
+      rank_key: hand.rank_key,
+    }));
+    legacy_result = {
+      winning_option_version_id: winner.option_id,
+      entropy_digest: deal.entropy_digest,
+      audit_hash: buildTeenPattiResultCommitment({
+        round_id: round.id,
+        config_version_id: round.config_version_id,
+        winning_option_id: winner.option_id,
+        algorithm_version: TEEN_PATTI_RNG_ALGORITHM_VERSION,
+        entropy_digest: deal.entropy_digest,
+        hands,
+        generated_at: database_now,
+      }),
+      deal_attempt_count: deal.deal_attempt_count,
+      hands,
+      generated_at: database_now,
+    };
+  }
 
-  const deal = dealUniqueWinner(options.map((option) => ({ id: option.id, code: option.code })));
-  const winner = deal.hands[deal.winner_index];
-  if (!winner) throw new Error('Teen Patti deal produced no winner');
-  const generated_at = database_now;
-  const drawing_started_at = generated_at;
+  const drawing_started_at = database_now;
   const result_reveal_at = new Date(
     drawing_started_at.getTime() + round.config_version.drawing_duration_ms,
   );
-  const hands = deal.hands.map((hand) => ({
-    option_id: hand.option_id,
-    option_code: hand.option_code,
-    cards: hand.cards,
-    category: hand.category,
-    rank_key: hand.rank_key,
-  }));
-  const audit_hash = sha256([
-    round.id,
-    round.config_version_id,
-    winner.option_id,
-    TEEN_PATTI_RNG_ALGORITHM_VERSION,
-    deal.entropy_digest,
-    JSON.stringify(hands),
-    generated_at.toISOString(),
-  ].join('|'));
 
-  const generated = await withSerializableRetry(async (tx) => {
+  const transitioned = await withSerializableRetry(async (tx) => {
     const current = await tx.teenPattiRound.findUnique({ where: { id: round.id }, include: { result: true } });
-    if (!current || current.status !== TeenPattiRoundStatus.betting_locked || current.result) return false;
+    if (!current || current.status !== TeenPattiRoundStatus.betting_locked) return false;
 
-    await tx.teenPattiRoundResult.create({
-      data: {
-        round_id: round.id,
-        winning_option_version_id: winner.option_id,
-        algorithm_version: TEEN_PATTI_RNG_ALGORITHM_VERSION,
-        config_version_id: round.config_version_id,
-        entropy_digest: deal.entropy_digest,
-        audit_hash,
-        deal_attempt_count: deal.deal_attempt_count,
-        hands,
-        generated_at,
-      },
-    });
+    if (!current.result) {
+      if (!legacy_result) {
+        throw new Error('Teen Patti predealt result is unavailable');
+      }
+      await tx.teenPattiRoundResult.create({
+        data: {
+          round_id: round.id,
+          winning_option_version_id:
+            legacy_result.winning_option_version_id,
+          algorithm_version: TEEN_PATTI_RNG_ALGORITHM_VERSION,
+          config_version_id: round.config_version_id,
+          entropy_digest: legacy_result.entropy_digest,
+          audit_hash: legacy_result.audit_hash,
+          deal_attempt_count: legacy_result.deal_attempt_count,
+          hands: legacy_result.hands,
+          generated_at: legacy_result.generated_at,
+        },
+      });
+    }
     await tx.teenPattiRound.update({
       where: { id: round.id },
       data: {
         status: TeenPattiRoundStatus.drawing,
-        result_generated_at: generated_at,
+        ...(current.result_generated_at
+          ? {}
+          : { result_generated_at: legacy_result?.generated_at ?? database_now }),
         drawing_started_at,
         result_reveal_at,
       },
@@ -268,8 +343,8 @@ const generateResult = async (round_id: string): Promise<boolean> => {
     });
     return true;
   });
-  if (generated) await cacheRound(round_id);
-  return generated;
+  if (transitioned) await cacheRound(round_id);
+  return transitioned;
 };
 
 const startDrawing = async (round_id: string): Promise<boolean> => {
@@ -325,6 +400,12 @@ const revealResult = async (round_id: string): Promise<string[] | null> => {
     result_reveal_at: Date;
     database_now: Date;
     hands: Prisma.JsonValue;
+    algorithm_version: string;
+    config_version_id: string;
+    entropy_digest: string;
+    audit_hash: string;
+    deal_attempt_count: number;
+    generated_at: Date;
     winning_option_id: string;
     winning_option_code: string;
     winning_option_name: string;
@@ -336,6 +417,12 @@ const revealResult = async (round_id: string): Promise<string[] | null> => {
       game_round.result_reveal_at,
       CURRENT_TIMESTAMP AS database_now,
       result.hands,
+      result.algorithm_version,
+      result.config_version_id,
+      result.entropy_digest,
+      result.audit_hash,
+      result.deal_attempt_count,
+      result.generated_at,
       winning_option.id AS winning_option_id,
       winning_option.code AS winning_option_code,
       winning_option.name AS winning_option_name,
@@ -382,6 +469,12 @@ const revealResult = async (round_id: string): Promise<string[] | null> => {
             image_url: round.winning_option_image_url,
           },
           hands: round.hands,
+          algorithm_version: round.algorithm_version,
+          config_version_id: round.config_version_id,
+          entropy_digest: round.entropy_digest,
+          deal_attempt_count: round.deal_attempt_count,
+          generated_at: round.generated_at.toISOString(),
+          result_commitment: round.audit_hash,
           revealed_at: revealed_at.toISOString(),
         },
       },
@@ -688,7 +781,11 @@ const closeSettledRound = async (round_id: string): Promise<void> => {
     include: { config_version: true },
   });
   if (!round || round.status !== TeenPattiRoundStatus.settled || !round.result_reveal_at) return;
-  const close_at = round.result_reveal_at.getTime() + round.config_version.result_duration_ms;
+  const close_at =
+    round.result_reveal_at.getTime() +
+    effectiveTeenPattiResultDurationMs(
+      round.config_version.result_duration_ms,
+    );
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
     Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
   );
@@ -809,7 +906,7 @@ const processCurrentRound = async (
       await lockRound(round.id);
       break;
     case TeenPattiRoundStatus.betting_locked:
-      await generateResult(round.id);
+      await startDrawingAfterLock(round.id);
       break;
     case TeenPattiRoundStatus.result_ready:
       await startDrawing(round.id);

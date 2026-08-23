@@ -210,8 +210,8 @@ Base URL: `/api/v1`
 | GET | `/games/greedy/my-bets?page=1&limit=20` | Player bet history |
 | GET | `/games/greedy/rounds?page=1&limit=20` | Public result history |
 | GET | `/games/greedy/rounds/:round_id` | Public round detail; result hidden until reveal |
-| GET | `/games/teen-patti/snapshot` | Teen Patti snapshot (3 decks, rake, hidden hands until reveal) |
-| POST | `/games/teen-patti/bets` | Place an idempotent bet on one deck |
+| GET | `/games/teen-patti/snapshot` | Teen Patti snapshot (3 hands, one committed preview card each, grouped bettors, rake; full hands hidden until reveal) |
+| POST | `/games/teen-patti/bets` | Place an idempotent enabled-chip bet on any hand; repeated/cross-hand taps are allowed until lock |
 | GET | `/games/teen-patti/my-bets?page=1&limit=20` | Teen Patti bet history |
 | GET | `/games/teen-patti/rounds?page=1&limit=20` | Public Teen Patti result history |
 | GET | `/games/teen-patti/rounds/:round_id` | Public round detail; cards hidden until reveal |
@@ -292,6 +292,7 @@ teen_patti.round.closed
 teen_patti.round.cancelled
 teen_patti.round.refunded
 teen_patti.bet.accepted
+teen_patti.bet.placed
 
 wallet.balance.updated
 ```
