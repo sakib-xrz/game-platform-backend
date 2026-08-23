@@ -197,6 +197,13 @@ enum PlatformAppStatus {
   @@map("platform_app_status")
 }
 
+enum PlatformUserStatus {
+  active
+  disabled
+
+  @@map("platform_user_status")
+}
+
 enum AdminApprovalStatus {
   pending
   approved
@@ -313,6 +320,8 @@ model WalletLedger {
   greedy_classic_debit_bet GreedyClassicBet?        @relation("greedy_classic_bet_debit_ledger")
   greedy_classic_payout    GreedyClassicUserPayout? @relation("greedy_classic_payout_ledger")
   greedy_classic_refund    GreedyClassicUserRefund? @relation("greedy_classic_refund_ledger")
+  platform_coin_deposits   PlatformCoinDeposit[]
+  platform_coin_withdrawals PlatformCoinWithdrawal[]
 
   @@index([wallet_id, created_at])
   @@index([user_id, created_at])
@@ -1537,7 +1546,70 @@ model PlatformApp {
   updated_at          DateTime          @updatedAt
 
   created_by AdminUser? @relation(fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+  platform_users PlatformUser[]
+  platform_coin_deposits PlatformCoinDeposit[]
+  platform_coin_withdrawals PlatformCoinWithdrawal[]
 
   @@index([status, updated_at])
   @@map("platform_apps")
+}
+
+model PlatformUser {
+  id               String             @id @default(cuid())
+  platform_app_id  String
+  external_user_id String
+  email            String
+  display_name     String
+  photo_url        String?
+  status           PlatformUserStatus @default(active)
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+
+  platform_app PlatformApp           @relation(fields: [platform_app_id], references: [id], onDelete: Restrict)
+  coin_deposits PlatformCoinDeposit[]
+  coin_withdrawals PlatformCoinWithdrawal[]
+
+  @@unique([platform_app_id, external_user_id])
+  @@index([platform_app_id, email])
+  @@map("platform_users")
+}
+
+model PlatformCoinDeposit {
+  id                 String   @id @default(cuid())
+  platform_app_id    String
+  platform_user_id   String
+  external_user_id   String
+  client_request_id  String
+  received_amount    BigInt
+  converted_amount   BigInt
+  wallet_ledger_id   String   @unique
+  created_at         DateTime @default(now())
+
+  platform_app  PlatformApp  @relation(fields: [platform_app_id], references: [id], onDelete: Restrict)
+  platform_user PlatformUser @relation(fields: [platform_user_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation(fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([platform_app_id, client_request_id])
+  @@index([platform_user_id, created_at])
+  @@map("platform_coin_deposits")
+}
+
+model PlatformCoinWithdrawal {
+  id                 String   @id @default(cuid())
+  platform_app_id    String
+  platform_user_id   String
+  external_user_id   String
+  client_request_id  String
+  requested_amount   BigInt
+  transferred_amount BigInt
+  wallet_ledger_id   String   @unique
+  created_at         DateTime @default(now())
+
+  platform_app  PlatformApp  @relation(fields: [platform_app_id], references: [id], onDelete: Restrict)
+  platform_user PlatformUser @relation(fields: [platform_user_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation(fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([platform_app_id, client_request_id])
+  @@index([platform_user_id, created_at])
+  @@map("platform_coin_withdrawals")
 }

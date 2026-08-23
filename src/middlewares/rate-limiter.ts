@@ -74,3 +74,19 @@ export const betRateLimiter = createBetRateLimiter('greedy');
 export const teenPattiBetRateLimiter = createBetRateLimiter('teen-patti');
 export const lucky77BetRateLimiter = createBetRateLimiter('lucky-77');
 export const greedyClassicBetRateLimiter = createBetRateLimiter('greedy-classic');
+
+export const integrationRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const package_name = req.header('x-package-name')?.trim().toLowerCase() || 'unknown';
+    return `${ipKeyGenerator(req.ip || 'unknown')}:${package_name}`;
+  },
+  message: {
+    success: false,
+    statusCode: 429,
+    message: 'Too many integration requests',
+  },
+});

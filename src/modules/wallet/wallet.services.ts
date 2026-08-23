@@ -285,6 +285,108 @@ const adminAdjustWallet = async (payload: AdminAdjustWalletBody, context: AdminA
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 };
 
+export const creditPlatformPurchase = async (
+  tx: Prisma.TransactionClient,
+  params: {
+    user_id: string;
+    amount: bigint;
+    reference_type: string;
+    reference_id: string;
+    metadata?: Prisma.InputJsonValue;
+  },
+) => {
+  const wallet = await ensureWallet(params.user_id, tx);
+  const balance_after = wallet.balance + params.amount;
+  const updated = await tx.wallet.update({
+    where: { id: wallet.id },
+    data: {
+      balance: balance_after,
+      version: { increment: 1 },
+    },
+  });
+  const ledger = await tx.walletLedger.create({
+    data: {
+      wallet_id: wallet.id,
+      user_id: params.user_id,
+      type: WalletLedgerType.purchase_credit,
+      amount: params.amount,
+      balance_before: wallet.balance,
+      balance_after,
+      reference_type: params.reference_type,
+      reference_id: params.reference_id,
+      metadata: params.metadata,
+    },
+  });
+  await tx.outboxEvent.create({
+    data: {
+      aggregate_type: 'wallet',
+      aggregate_id: wallet.id,
+      event_type: 'wallet.balance.updated',
+      socket_room: `user:${params.user_id}`,
+      payload: {
+        wallet_id: wallet.id,
+        balance: balance_after.toString(),
+        wallet_version: updated.version,
+        reason: 'purchase_credit',
+      } satisfies WalletBalanceUpdatedPayload,
+    },
+  });
+  return { wallet: updated, ledger, balance_after };
+};
+
+export const debitPlatformWithdrawal = async (
+  tx: Prisma.TransactionClient,
+  params: {
+    user_id: string;
+    amount: bigint;
+    reference_type: string;
+    reference_id: string;
+    metadata?: Prisma.InputJsonValue;
+  },
+) => {
+  const wallet = await ensureWallet(params.user_id, tx);
+  if (wallet.balance < params.amount) {
+    throw new AppError(httpStatus.BAD_REQUEST, 'Insufficient wallet balance');
+  }
+
+  const balance_after = wallet.balance - params.amount;
+  const updated = await tx.wallet.update({
+    where: { id: wallet.id },
+    data: {
+      balance: balance_after,
+      version: { increment: 1 },
+    },
+  });
+  const ledger = await tx.walletLedger.create({
+    data: {
+      wallet_id: wallet.id,
+      user_id: params.user_id,
+      type: WalletLedgerType.withdrawal_debit,
+      amount: -params.amount,
+      balance_before: wallet.balance,
+      balance_after,
+      reference_type: params.reference_type,
+      reference_id: params.reference_id,
+      metadata: params.metadata,
+    },
+  });
+  await tx.outboxEvent.create({
+    data: {
+      aggregate_type: 'wallet',
+      aggregate_id: wallet.id,
+      event_type: 'wallet.balance.updated',
+      socket_room: `user:${params.user_id}`,
+      payload: {
+        wallet_id: wallet.id,
+        balance: balance_after.toString(),
+        wallet_version: updated.version,
+        reason: 'withdrawal_debit',
+      } satisfies WalletBalanceUpdatedPayload,
+    },
+  });
+  return { wallet: updated, ledger, balance_after, balance_before: wallet.balance };
+};
+
 const WalletService = {
   getMyWallet,
   getTransactions,

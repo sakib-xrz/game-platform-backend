@@ -14,6 +14,7 @@ declare global {
       request_id?: string;
       admin?: AuthenticatedAdminContext;
       admin_session_id?: string;
+      platform_app?: import('@/middlewares/platform-app-auth').AuthenticatedPlatformApp;
     }
   }
 }

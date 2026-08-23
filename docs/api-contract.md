@@ -245,6 +245,157 @@ Managed assets use presign/complete or direct compatibility upload. The server d
 
 Approvals expire after 24 hours by default. A requester cannot approve their own request, and approval payloads are immutable and hash-verified.
 
+## Platform app integration
+
+Server-to-server endpoints for registered mobile apps. Every request must include app credentials:
+
+```text
+X-App-Name: Greedy Live
+X-Package-Name: com.example.greedy
+X-Sha-Key: AA:BB:CC:DD:...
+Content-Type: application/json
+```
+
+Credentials must match an active row in `/admin/platform-apps`. The app backend always identifies users with its own `external_user_id`; the game platform stores an internal user ID for wallets and gameplay, but integration responses do not require the app to persist that internal ID.
+
+### POST `/integrations/users/sync`
+
+Create or update a user scoped to the authenticated app.
+
+Body:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "email": "user@example.com",
+  "name": "Rashid",
+  "photo_url": "https://cdn.example.com/a.jpg"
+}
+```
+
+Behavior:
+
+- Upsert by `(platform_app_id, external_user_id)`
+- First sync creates a COIN wallet with balance `0`
+- Repeat sync updates email, name, and photo only
+
+Response:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "email": "user@example.com",
+  "name": "Rashid",
+  "photo_url": "https://cdn.example.com/a.jpg",
+  "balance": "0",
+  "currency": "COIN",
+  "created": true
+}
+```
+
+Returns `201` when created, `200` when updated.
+
+### POST `/integrations/users/coins`
+
+Credit game coins 1:1 from the app backend.
+
+Body:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "amount": "500",
+  "client_request_id": "purchase-uuid-001"
+}
+```
+
+Behavior:
+
+- User must already exist via sync
+- `received_amount = converted_amount = amount`
+- Idempotent on `(platform_app_id, client_request_id)`
+- Writes `wallet_ledger` with type `purchase_credit` and a `platform_coin_deposits` audit row
+
+Response:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "received_amount": "500",
+  "converted_amount": "500",
+  "balance": "500",
+  "currency": "COIN",
+  "idempotent": false
+}
+```
+
+### GET `/integrations/users/:external_user_id/coins`
+
+Return the current COIN balance for a synced user in the authenticated app.
+
+Response:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "balance": "500",
+  "currency": "COIN"
+}
+```
+
+Returns `404` when the user has not been synced for that app.
+
+### POST `/integrations/users/coins/withdraw`
+
+Transfer coins from the game wallet back to the app backend.
+
+Body:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "amount": "500",
+  "client_request_id": "withdraw-uuid-001"
+}
+```
+
+Behavior:
+
+- User must already exist via sync
+- Fails with `400` when balance is insufficient, including `errors.balance`, `errors.requested_amount`, and `errors.shortfall`
+- `requested_amount = transferred_amount = amount` (1:1)
+- Idempotent on `(platform_app_id, client_request_id)`
+- Deducts from wallet, writes `wallet_ledger` with type `withdrawal_debit`, and records `platform_coin_withdrawals`
+
+Response:
+
+```json
+{
+  "external_user_id": "app-user-123",
+  "requested_amount": "500",
+  "transferred_amount": "500",
+  "balance": "0",
+  "currency": "COIN",
+  "idempotent": false
+}
+```
+
+Insufficient balance example:
+
+```json
+{
+  "success": false,
+  "statusCode": 400,
+  "message": "Insufficient wallet balance for withdrawal",
+  "errors": {
+    "balance": ["300"],
+    "requested_amount": ["500"],
+    "shortfall": ["200"],
+    "currency": ["COIN"]
+  }
+}
+```
+
 ## Health
 
 - GET `/health/live`
