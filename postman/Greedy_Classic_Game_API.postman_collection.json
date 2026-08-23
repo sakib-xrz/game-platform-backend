@@ -1,0 +1,1410 @@
+{
+  "info": {
+    "_postman_id": "32950d14-56ed-4f03-8926-4bc611e4a44a",
+    "name": "Greedy Classic Game API",
+    "description": "Greedy Classic REST collection (exact parallel of Greedy: 8 options Falcon\u2026Diamond, same payouts/weights/timings).\n\n### Setup\n1. Import this collection and `Greedy_Classic_Game_Local.postman_environment.json`.\n2. Set `admin_email` / `admin_password` (seed defaults: admin@example.com / AdminPassword123).\n3. Run **Admin Login** first \u2014 it stores `admin_session_token`.\n4. Start API + worker. Resume Greedy Classic, then Snapshot \u2192 Place Bet.\n\n### Notes\n- Place Bet returns **HTTP 201**.\n- Game code `GREEDY_CLASSIC`, socket room `game:greedy-classic`, events `greedy_classic.*`.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "35194269"
+  },
+  "item": [
+    {
+      "name": "00 \u2014 Health",
+      "item": [
+        {
+          "name": "Live",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Service is alive\", function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data).to.have.property(\"process_uptime_seconds\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/health/live",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                "live"
+              ]
+            },
+            "description": "Liveness probe. Confirms the API process is alive."
+          },
+          "response": []
+        },
+        {
+          "name": "Ready",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Database and Redis are ready\", function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data.database).to.eql(\"ready\");",
+                  "    pm.expect(json.data.redis).to.eql(\"ready\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/health/ready",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "Readiness probe. Validates PostgreSQL and Redis availability."
+          },
+          "response": []
+        }
+      ],
+      "description": "API process and infrastructure readiness checks."
+    },
+    {
+      "name": "01 \u2014 Admin / Game Lifecycle",
+      "item": [
+        {
+          "name": "Get Greedy Runtime",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Runtime response successful\", () => pm.expect(json.success).to.eql(true));",
+                  "",
+                  "const runtime = json.data;",
+                  "if (runtime) {",
+                  "    pm.collectionVariables.set(\"runtime_status\", runtime.status || \"\");",
+                  "    pm.collectionVariables.set(\"runtime_revision\", String(runtime.revision ?? \"\"));",
+                  "    if (runtime.active_config_version?.id) {",
+                  "        pm.collectionVariables.set(\"published_config_id\", runtime.active_config_version.id);",
+                  "    }",
+                  "    if (runtime.current_round?.id) {",
+                  "        pm.collectionVariables.set(\"current_round_id\", runtime.current_round.id);",
+                  "        pm.collectionVariables.set(\"current_round_number\", String(runtime.current_round.round_number ?? \"\"));",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/runtime",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "runtime"
+              ]
+            },
+            "description": "Reads persisted Greedy runtime state and captures active config/current round IDs when available."
+          },
+          "response": []
+        },
+        {
+          "name": "Resume Greedy Classic",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Greedy resumed\", () => pm.expect(json.success).to.eql(true));",
+                  "if (json.data?.status) pm.collectionVariables.set(\"runtime_status\", json.data.status);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/resume",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "resume"
+              ]
+            },
+            "description": "Starts/resumes Greedy. The game worker creates a round if none exists."
+          },
+          "response": []
+        },
+        {
+          "name": "Pause Greedy",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Greedy paused\", () => pm.expect(json.success).to.eql(true));",
+                  "if (json.data?.status) pm.collectionVariables.set(\"runtime_status\", json.data.status);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/pause",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "pause"
+              ]
+            },
+            "description": "Stops future round creation. The active round is allowed to finish safely."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Current Round",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Round cancelled\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data.status).to.eql(\"cancelled\");",
+                  "});",
+                  "if (json.data?.id) pm.collectionVariables.set(\"last_cancelled_round_id\", json.data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"{{cancel_reason}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/cancel-current-round",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "cancel-current-round"
+              ]
+            },
+            "description": "Operational recovery endpoint. Allowed only before result reveal. Worker refunds accepted bets exactly once."
+          },
+          "response": []
+        }
+      ],
+      "description": "Greedy runtime operations. Requires `admin_api_key`."
+    },
+    {
+      "name": "02 \u2014 Player / Bootstrap",
+      "item": [
+        {
+          "name": "Snapshot & Capture Current Round",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Snapshot successful\", () => pm.expect(json.success).to.eql(true));",
+                  "",
+                  "const data = json.data || {};",
+                  "if (data.wallet?.id) {",
+                  "    pm.collectionVariables.set(\"wallet_id\", data.wallet.id);",
+                  "    pm.collectionVariables.set(\"last_wallet_balance\", String(data.wallet.balance ?? \"\"));",
+                  "}",
+                  "",
+                  "if (data.active_config?.id) {",
+                  "    pm.collectionVariables.set(\"published_config_id\", data.active_config.id);",
+                  "}",
+                  "",
+                  "const round = data.round;",
+                  "if (round?.id) {",
+                  "    pm.collectionVariables.set(\"current_round_id\", round.id);",
+                  "    pm.collectionVariables.set(\"current_round_number\", String(round.round_number ?? \"\"));",
+                  "    pm.collectionVariables.set(\"current_round_status\", round.status || \"\");",
+                  "",
+                  "    const option = (round.options || []).find(o => o.is_enabled !== false);",
+                  "    if (option) {",
+                  "        pm.collectionVariables.set(\"current_option_id\", option.id);",
+                  "        pm.collectionVariables.set(\"current_option_code\", option.code || \"\");",
+                  "        pm.collectionVariables.set(\"current_option_name\", option.name || \"\");",
+                  "        pm.collectionVariables.set(\"current_option_payout_numerator\", String(option.payout_numerator ?? \"\"));",
+                  "        pm.collectionVariables.set(\"current_option_payout_denominator\", String(option.payout_denominator ?? \"\"));",
+                  "    }",
+                  "",
+                  "    const chip = (round.chip_values || []).find(c => c.is_enabled !== false);",
+                  "    if (chip?.amount) {",
+                  "        pm.collectionVariables.set(\"suggested_chip_amount\", String(chip.amount));",
+                  "    }",
+                  "} else {",
+                  "    console.warn(\"No active round yet. Ensure the game worker is running and Greedy is resumed, then send this request again.\");",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/snapshot",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "snapshot"
+              ]
+            },
+            "description": "Primary player recovery/bootstrap endpoint. Automatically captures current_round_id, option_id, config ID, wallet ID, balance, and a valid chip value."
+          },
+          "response": []
+        }
+      ],
+      "description": "Player bootstrap/recovery state. Run Snapshot after Resume to capture current round/option IDs."
+    },
+    {
+      "name": "03 \u2014 Wallet",
+      "item": [
+        {
+          "name": "Credit Test Wallet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Wallet adjustment successful\", () => pm.expect(json.success).to.eql(true));",
+                  "",
+                  "if (json.data?.wallet?.id) pm.collectionVariables.set(\"wallet_id\", json.data.wallet.id);",
+                  "if (json.data?.wallet?.balance !== undefined) {",
+                  "    pm.collectionVariables.set(\"last_wallet_balance\", String(json.data.wallet.balance));",
+                  "}",
+                  "if (json.data?.ledger?.id) {",
+                  "    pm.collectionVariables.set(\"wallet_ledger_id\", json.data.ledger.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"amount\": \"{{wallet_adjustment_amount}}\",\n  \"reason\": \"{{wallet_adjustment_reason}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/wallets/adjust",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "wallets",
+                "adjust"
+              ]
+            },
+            "description": "Development/admin wallet credit. Automatically captures wallet_id, ledger_id, and updated balance."
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Wallet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Wallet fetched\", () => pm.expect(json.success).to.eql(true));",
+                  "",
+                  "if (json.data?.id) pm.collectionVariables.set(\"wallet_id\", json.data.id);",
+                  "if (json.data?.balance !== undefined) {",
+                  "    pm.collectionVariables.set(\"last_wallet_balance\", String(json.data.balance));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/wallets/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "wallets",
+                "me"
+              ]
+            },
+            "description": "Returns the current user's shared COIN wallet."
+          },
+          "response": []
+        },
+        {
+          "name": "Wallet Ledger",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Ledger fetched\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data).to.be.an(\"array\");",
+                  "    pm.expect(json.meta).to.have.property(\"total\");",
+                  "});",
+                  "if (json.data?.[0]?.id) pm.collectionVariables.set(\"latest_wallet_ledger_id\", json.data[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/wallets/me/transactions?page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "wallets",
+                "me",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            },
+            "description": "Immutable wallet ledger history."
+          },
+          "response": []
+        }
+      ],
+      "description": "Shared platform wallet and immutable ledger."
+    },
+    {
+      "name": "04 \u2014 Greedy / Betting",
+      "item": [
+        {
+          "name": "Place Bet (Auto Idempotency Key)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"current_round_id\") || !pm.collectionVariables.get(\"current_option_id\")) {",
+                  "    throw new Error(\"Missing current_round_id/current_option_id. Run 'Snapshot & Capture Current Round' first.\");",
+                  "}",
+                  "",
+                  "const generated = pm.variables.replaceIn(\"bet-{{$guid}}\");",
+                  "pm.collectionVariables.set(\"client_request_id\", generated);",
+                  "pm.collectionVariables.set(\"last_client_request_id\", generated);",
+                  "",
+                  "const configured = pm.environment.get(\"bet_amount\") || pm.collectionVariables.get(\"bet_amount\");",
+                  "if (!configured) {",
+                  "    const suggested = pm.collectionVariables.get(\"suggested_chip_amount\") || \"10\";",
+                  "    pm.collectionVariables.set(\"bet_amount\", suggested);",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Bet accepted\", () => pm.expect(json.success).to.eql(true));",
+                  "",
+                  "if (json.data?.bet_id) pm.collectionVariables.set(\"bet_id\", json.data.bet_id);",
+                  "if (json.data?.round_id) pm.collectionVariables.set(\"current_round_id\", json.data.round_id);",
+                  "if (json.data?.option_id) pm.collectionVariables.set(\"current_option_id\", json.data.option_id);",
+                  "if (json.data?.wallet_balance !== undefined) {",
+                  "    pm.collectionVariables.set(\"last_wallet_balance\", String(json.data.wallet_balance));",
+                  "}",
+                  "pm.collectionVariables.set(\"last_bet_amount\", String(json.data?.amount ?? pm.variables.get(\"bet_amount\") ?? \"\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"round_id\": \"{{current_round_id}}\",\n  \"option_id\": \"{{current_option_id}}\",\n  \"amount\": \"{{bet_amount}}\",\n  \"client_request_id\": \"{{client_request_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/bets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "bets"
+              ]
+            },
+            "description": "Places a bet using dynamically captured round/option IDs. Generates a fresh client_request_id each time."
+          },
+          "response": []
+        },
+        {
+          "name": "Replay Same Bet (Idempotency Verification)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"last_client_request_id\")) {",
+                  "    throw new Error(\"Run 'Place Bet (Auto Idempotency Key)' first.\");",
+                  "}",
+                  "pm.collectionVariables.set(\"expected_replay_bet_id\", pm.collectionVariables.get(\"bet_id\") || \"\");",
+                  "pm.collectionVariables.set(\"wallet_before_replay\", pm.collectionVariables.get(\"last_wallet_balance\") || \"\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Replay returned success\", () => pm.expect(json.success).to.eql(true));",
+                  "",
+                  "const expectedBetId = pm.collectionVariables.get(\"expected_replay_bet_id\");",
+                  "if (expectedBetId) {",
+                  "    pm.test(\"Same bet_id returned\", () => pm.expect(json.data.bet_id).to.eql(expectedBetId));",
+                  "}",
+                  "",
+                  "const before = pm.collectionVariables.get(\"wallet_before_replay\");",
+                  "if (before) {",
+                  "    pm.test(\"Wallet was not debited twice\", () => pm.expect(String(json.data.wallet_balance)).to.eql(before));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"round_id\": \"{{current_round_id}}\",\n  \"option_id\": \"{{current_option_id}}\",\n  \"amount\": \"{{last_bet_amount}}\",\n  \"client_request_id\": \"{{last_client_request_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/bets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "bets"
+              ]
+            },
+            "description": "Replays the exact same bet request. Expected: HTTP 201 with the same bet_id and no second wallet debit."
+          },
+          "response": []
+        },
+        {
+          "name": "Same Key + Different Amount (Expect 409)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"last_client_request_id\")) {",
+                  "    throw new Error(\"Run a successful bet first.\");",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Idempotency conflict rejected\", () => {",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include(\"Idempotency\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"round_id\": \"{{current_round_id}}\",\n  \"option_id\": \"{{current_option_id}}\",\n  \"amount\": \"{{conflict_bet_amount}}\",\n  \"client_request_id\": \"{{last_client_request_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/bets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "bets"
+              ]
+            },
+            "description": "Negative test: same idempotency key with a different payload must be rejected with 409."
+          },
+          "response": []
+        },
+        {
+          "name": "My Bet History",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Bet history fetched\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data).to.be.an(\"array\");",
+                  "});",
+                  "if (json.data?.[0]?.id) pm.collectionVariables.set(\"latest_bet_id\", json.data[0].id);",
+                  "if (json.data?.[0]?.round_id) pm.collectionVariables.set(\"history_round_id\", json.data[0].round_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/my-bets?page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "my-bets"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            },
+            "description": "Player bet history with round, option and settlement details."
+          },
+          "response": []
+        }
+      ],
+      "description": "Core betting flow with dynamic round/option IDs and idempotency verification."
+    },
+    {
+      "name": "05 \u2014 Greedy / Rounds & Results",
+      "item": [
+        {
+          "name": "Public Round History",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Round history fetched\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data).to.be.an(\"array\");",
+                  "});",
+                  "",
+                  "const latest = json.data?.[0];",
+                  "if (latest?.id) {",
+                  "    pm.collectionVariables.set(\"history_round_id\", latest.id);",
+                  "    pm.collectionVariables.set(\"latest_revealed_round_id\", latest.id);",
+                  "    pm.collectionVariables.set(\"latest_revealed_round_number\", String(latest.round_number ?? \"\"));",
+                  "}",
+                  "if (latest?.result?.winning_option?.id) {",
+                  "    pm.collectionVariables.set(\"last_winning_option_id\", latest.result.winning_option.id);",
+                  "    pm.collectionVariables.set(\"last_winning_option_code\", latest.result.winning_option.code || \"\");",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/rounds?page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "rounds"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            },
+            "description": "Public revealed Greedy round history. Captures the latest revealed round for detail testing."
+          },
+          "response": []
+        },
+        {
+          "name": "Round Detail",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"history_round_id\")) {",
+                  "    throw new Error(\"Missing history_round_id. Run 'Public Round History' or 'My Bet History' first.\");",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Round detail fetched\", () => pm.expect(json.success).to.eql(true));",
+                  "if (json.data?.result?.winning_option?.id) {",
+                  "    pm.collectionVariables.set(\"last_winning_option_id\", json.data.result.winning_option.id);",
+                  "    pm.collectionVariables.set(\"last_winning_option_code\", json.data.result.winning_option.code || \"\");",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/greedy-classic/rounds/{{history_round_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "greedy",
+                "rounds",
+                "{{history_round_id}}"
+              ]
+            },
+            "description": "Fetches a specific round. Uses history_round_id captured from round history or my bets."
+          },
+          "response": []
+        }
+      ],
+      "description": "Public revealed round history and detail."
+    },
+    {
+      "name": "06 \u2014 Admin / Config Versions",
+      "item": [
+        {
+          "name": "List Config Versions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Config list fetched\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data).to.be.an(\"array\");",
+                  "});",
+                  "",
+                  "const configs = json.data || [];",
+                  "const draft = configs.find(c => c.status === \"draft\");",
+                  "const published = configs.find(c => c.status === \"published\");",
+                  "",
+                  "if (draft?.id) pm.collectionVariables.set(\"draft_config_id\", draft.id);",
+                  "if (published?.id) pm.collectionVariables.set(\"published_config_id\", published.id);",
+                  "if (configs[0]?.id) pm.collectionVariables.set(\"latest_config_id\", configs[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/config-versions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "config-versions"
+              ]
+            },
+            "description": "Lists all immutable Greedy config versions and captures latest draft/published config IDs."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Draft Config",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Draft config created\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data.status).to.eql(\"draft\");",
+                  "});",
+                  "",
+                  "if (json.data?.id) {",
+                  "    pm.collectionVariables.set(\"draft_config_id\", json.data.id);",
+                  "    pm.collectionVariables.set(\"latest_config_id\", json.data.id);",
+                  "}",
+                  "if (json.data?.version !== undefined) {",
+                  "    pm.collectionVariables.set(\"latest_config_version\", String(json.data.version));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"betting_duration_ms\": {{betting_duration_ms}},\n  \"lock_duration_ms\": {{lock_duration_ms}},\n  \"drawing_duration_ms\": {{drawing_duration_ms}},\n  \"result_duration_ms\": {{result_duration_ms}},\n  \"min_bet\": \"{{min_bet}}\",\n  \"max_single_bet\": \"{{max_single_bet}}\",\n  \"max_round_bet\": \"{{max_round_bet}}\",\n  \"notes\": \"Created from Postman at {{$isoTimestamp}}\",\n  \"chip_values\": [\n    {\n      \"amount\": \"10\",\n      \"display_order\": 1,\n      \"is_enabled\": true\n    },\n    {\n      \"amount\": \"50\",\n      \"display_order\": 2,\n      \"is_enabled\": true\n    },\n    {\n      \"amount\": \"100\",\n      \"display_order\": 3,\n      \"is_enabled\": true\n    },\n    {\n      \"amount\": \"500\",\n      \"display_order\": 4,\n      \"is_enabled\": true\n    },\n    {\n      \"amount\": \"1000\",\n      \"display_order\": 5,\n      \"is_enabled\": true\n    },\n    {\n      \"amount\": \"5000\",\n      \"display_order\": 6,\n      \"is_enabled\": true\n    }\n  ],\n  \"options\": [\n    {\n      \"code\": \"FALCON\",\n      \"name\": \"Falcon\",\n      \"image_url\": null,\n      \"display_order\": 1,\n      \"payout_numerator\": \"4\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"210\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"TIGER\",\n      \"name\": \"Tiger\",\n      \"image_url\": null,\n      \"display_order\": 2,\n      \"payout_numerator\": \"5\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"168\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"PANDA\",\n      \"name\": \"Panda\",\n      \"image_url\": null,\n      \"display_order\": 3,\n      \"payout_numerator\": \"6\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"140\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"LION\",\n      \"name\": \"Lion\",\n      \"image_url\": null,\n      \"display_order\": 4,\n      \"payout_numerator\": \"7\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"120\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"SHARK\",\n      \"name\": \"Shark\",\n      \"image_url\": null,\n      \"display_order\": 5,\n      \"payout_numerator\": \"8\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"105\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"DRAGON\",\n      \"name\": \"Dragon\",\n      \"image_url\": null,\n      \"display_order\": 6,\n      \"payout_numerator\": \"10\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"84\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"CROWN\",\n      \"name\": \"Crown\",\n      \"image_url\": null,\n      \"display_order\": 7,\n      \"payout_numerator\": \"15\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"56\",\n      \"is_enabled\": true\n    },\n    {\n      \"code\": \"DIAMOND\",\n      \"name\": \"Diamond\",\n      \"image_url\": null,\n      \"display_order\": 8,\n      \"payout_numerator\": \"20\",\n      \"payout_denominator\": \"1\",\n      \"probability_weight\": \"42\",\n      \"is_enabled\": true\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/config-versions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "config-versions"
+              ]
+            },
+            "description": "Creates a new immutable draft config using environment-driven timing/limit values and baseline option math."
+          },
+          "response": []
+        },
+        {
+          "name": "Publish Captured Draft Config",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"draft_config_id\")) {",
+                  "    throw new Error(\"Missing draft_config_id. Create a draft config or run List Config Versions first.\");",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"Config published\", () => {",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data.status).to.eql(\"published\");",
+                  "});",
+                  "",
+                  "if (json.data?.id) {",
+                  "    pm.collectionVariables.set(\"published_config_id\", json.data.id);",
+                  "    pm.collectionVariables.unset(\"draft_config_id\");",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Actor-Id",
+                "value": "{{admin_actor_id}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/greedy-classic/config-versions/{{draft_config_id}}/publish",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "greedy",
+                "config-versions",
+                "{{draft_config_id}}",
+                "publish"
+              ]
+            },
+            "description": "Publishes draft_config_id captured by Create Draft Config/List Config Versions."
+          },
+          "response": []
+        }
+      ],
+      "description": "Versioned Greedy configuration lifecycle."
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "requests": {},
+        "exec": [
+          "pm.test(\"Response is JSON\", function () {",
+          "    pm.expect(pm.response.headers.get(\"Content-Type\") || \"\").to.include(\"application/json\");",
+          "});",
+          "",
+          "pm.test(\"API response has expected envelope\", function () {",
+          "    const json = pm.response.json();",
+          "    pm.expect(json).to.have.property(\"success\");",
+          "    pm.expect(json).to.have.property(\"statusCode\");",
+          "    pm.expect(json).to.have.property(\"timestamp\");",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": ""
+    },
+    {
+      "key": "admin_api_key",
+      "value": ""
+    },
+    {
+      "key": "admin_actor_id",
+      "value": ""
+    },
+    {
+      "key": "user_id",
+      "value": ""
+    },
+    {
+      "key": "bet_amount",
+      "value": ""
+    },
+    {
+      "key": "current_round_id",
+      "value": ""
+    },
+    {
+      "key": "current_round_number",
+      "value": ""
+    },
+    {
+      "key": "current_round_status",
+      "value": ""
+    },
+    {
+      "key": "current_option_id",
+      "value": ""
+    },
+    {
+      "key": "current_option_code",
+      "value": ""
+    },
+    {
+      "key": "current_option_name",
+      "value": ""
+    },
+    {
+      "key": "current_option_payout_numerator",
+      "value": ""
+    },
+    {
+      "key": "current_option_payout_denominator",
+      "value": ""
+    },
+    {
+      "key": "suggested_chip_amount",
+      "value": ""
+    },
+    {
+      "key": "wallet_id",
+      "value": ""
+    },
+    {
+      "key": "wallet_ledger_id",
+      "value": ""
+    },
+    {
+      "key": "latest_wallet_ledger_id",
+      "value": ""
+    },
+    {
+      "key": "last_wallet_balance",
+      "value": ""
+    },
+    {
+      "key": "bet_id",
+      "value": ""
+    },
+    {
+      "key": "latest_bet_id",
+      "value": ""
+    },
+    {
+      "key": "client_request_id",
+      "value": ""
+    },
+    {
+      "key": "last_client_request_id",
+      "value": ""
+    },
+    {
+      "key": "last_bet_amount",
+      "value": ""
+    },
+    {
+      "key": "draft_config_id",
+      "value": ""
+    },
+    {
+      "key": "published_config_id",
+      "value": ""
+    },
+    {
+      "key": "latest_config_id",
+      "value": ""
+    },
+    {
+      "key": "history_round_id",
+      "value": ""
+    },
+    {
+      "key": "latest_revealed_round_id",
+      "value": ""
+    },
+    {
+      "key": "last_winning_option_id",
+      "value": ""
+    },
+    {
+      "key": "last_winning_option_code",
+      "value": ""
+    },
+    {
+      "key": "runtime_status",
+      "value": ""
+    },
+    {
+      "key": "runtime_revision",
+      "value": ""
+    },
+    {
+      "key": "last_cancelled_round_id",
+      "value": ""
+    }
+  ]
+}

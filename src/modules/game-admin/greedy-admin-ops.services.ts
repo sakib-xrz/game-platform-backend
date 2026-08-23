@@ -92,31 +92,100 @@ const updateDraft = async (config_id: string, payload: CreateGreedyConfigBody, c
       include: { options: true, chip_values: true, _count: { select: { rounds: true, results: true } } },
     });
     if (!target) throw new AppError(httpStatus.NOT_FOUND, 'Config version not found');
-    if (target.status !== ConfigVersionStatus.draft) throw new AppError(httpStatus.CONFLICT, 'Only draft configs can be edited');
-    if (target._count.rounds || target._count.results) throw new AppError(httpStatus.CONFLICT, 'A config referenced by a round cannot be edited');
+    if (target.status !== ConfigVersionStatus.draft && target.status !== ConfigVersionStatus.published) {
+      throw new AppError(httpStatus.CONFLICT, 'Only draft or published configs can be edited');
+    }
 
-    await tx.greedyChipValueVersion.deleteMany({ where: { config_version_id: target.id } });
-    await tx.greedyOptionVersion.deleteMany({ where: { config_version_id: target.id } });
-    const updated = await tx.greedyConfigVersion.update({
-      where: { id: target.id },
-      data: {
-        betting_duration_ms: payload.betting_duration_ms,
-        lock_duration_ms: payload.lock_duration_ms,
-        drawing_duration_ms: payload.drawing_duration_ms,
-        result_duration_ms: payload.result_duration_ms,
-        min_bet: BigInt(payload.min_bet),
-        max_single_bet: BigInt(payload.max_single_bet),
-        max_round_bet: BigInt(payload.max_round_bet),
-        notes: payload.notes,
-        options: { create: options.map((item) => ({
-          code: item.code, name: item.name, image_url: item.image_url ?? null, asset_id: item.asset_id ?? null, display_order: item.display_order,
-          payout_numerator: BigInt(item.payout_numerator), payout_denominator: BigInt(item.payout_denominator),
-          probability_weight: BigInt(item.probability_weight), is_enabled: item.is_enabled,
-        })) },
-        chip_values: { create: payload.chip_values.map((item) => ({ amount: BigInt(item.amount), display_order: item.display_order, is_enabled: item.is_enabled })) },
-      },
-      include: { options: { orderBy: { display_order: 'asc' } }, chip_values: { orderBy: { display_order: 'asc' } } },
-    });
+    const hasRoundRefs = target._count.rounds > 0 || target._count.results > 0;
+    const rootData = {
+      betting_duration_ms: payload.betting_duration_ms,
+      lock_duration_ms: payload.lock_duration_ms,
+      drawing_duration_ms: payload.drawing_duration_ms,
+      result_duration_ms: payload.result_duration_ms,
+      min_bet: BigInt(payload.min_bet),
+      max_single_bet: BigInt(payload.max_single_bet),
+      max_round_bet: BigInt(payload.max_round_bet),
+      notes: payload.notes,
+    };
+
+    let updated;
+
+    if (hasRoundRefs) {
+      const existingCodes = new Set(target.options.map((item) => item.code));
+      const payloadCodes = new Set(options.map((item) => item.code));
+      if (existingCodes.size !== payloadCodes.size || [...existingCodes].some((code) => !payloadCodes.has(code))) {
+        throw new AppError(httpStatus.CONFLICT, 'Option codes cannot be changed on a config referenced by rounds');
+      }
+
+      for (const item of options) {
+        const existing = target.options.find((option) => option.code === item.code);
+        if (!existing) throw new AppError(httpStatus.CONFLICT, `Option ${item.code} not found`);
+        await tx.greedyOptionVersion.update({
+          where: { id: existing.id },
+          data: {
+            name: item.name,
+            image_url: item.image_url ?? null,
+            asset_id: item.asset_id ?? null,
+            display_order: item.display_order,
+            payout_numerator: BigInt(item.payout_numerator),
+            payout_denominator: BigInt(item.payout_denominator),
+            probability_weight: BigInt(item.probability_weight),
+            is_enabled: item.is_enabled,
+          },
+        });
+      }
+
+      await tx.greedyChipValueVersion.deleteMany({ where: { config_version_id: target.id } });
+      if (payload.chip_values.length) {
+        await tx.greedyChipValueVersion.createMany({
+          data: payload.chip_values.map((item) => ({
+            config_version_id: target.id,
+            amount: BigInt(item.amount),
+            display_order: item.display_order,
+            is_enabled: item.is_enabled,
+          })),
+        });
+      }
+
+      updated = await tx.greedyConfigVersion.update({
+        where: { id: target.id },
+        data: rootData,
+        include: { options: { orderBy: { display_order: 'asc' } }, chip_values: { orderBy: { display_order: 'asc' } } },
+      });
+    } else {
+      await tx.greedyChipValueVersion.deleteMany({ where: { config_version_id: target.id } });
+      await tx.greedyOptionVersion.deleteMany({ where: { config_version_id: target.id } });
+      updated = await tx.greedyConfigVersion.update({
+        where: { id: target.id },
+        data: {
+          ...rootData,
+          options: { create: options.map((item) => ({
+            code: item.code, name: item.name, image_url: item.image_url ?? null, asset_id: item.asset_id ?? null, display_order: item.display_order,
+            payout_numerator: BigInt(item.payout_numerator), payout_denominator: BigInt(item.payout_denominator),
+            probability_weight: BigInt(item.probability_weight), is_enabled: item.is_enabled,
+          })) },
+          chip_values: { create: payload.chip_values.map((item) => ({ amount: BigInt(item.amount), display_order: item.display_order, is_enabled: item.is_enabled })) },
+        },
+        include: { options: { orderBy: { display_order: 'asc' } }, chip_values: { orderBy: { display_order: 'asc' } } },
+      });
+    }
+
+    if (target.status === ConfigVersionStatus.published) {
+      const runtime = await tx.greedyRuntimeState.findUnique({ where: { game_id: game.id } });
+      if (runtime?.active_config_version_id === target.id) {
+        await tx.greedyRuntimeState.update({ where: { game_id: game.id }, data: { revision: { increment: 1 } } });
+        await tx.outboxEvent.create({
+          data: {
+            aggregate_type: 'greedy_config_version',
+            aggregate_id: target.id,
+            event_type: 'greedy.config.updated',
+            socket_room: GREEDY_SOCKET_ROOM,
+            payload: { config_id: target.id, version: target.version },
+          },
+        });
+      }
+    }
+
     await writeAdminAudit(tx, { ...context, outcome: 'success' }, { action: 'greedy.config.updated', entity_type: 'greedy_config_version', entity_id: target.id, old_values: toConfigJson(target), new_values: toConfigJson(updated) });
     return updated;
   });

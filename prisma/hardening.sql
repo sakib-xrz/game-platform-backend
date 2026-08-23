@@ -68,3 +68,57 @@ DO $$ BEGIN
     ALTER TABLE greedy_user_refunds ADD CONSTRAINT greedy_user_refund_positive_ck CHECK (total_bet_amount > 0);
   END IF;
 END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_config_limits_ck') THEN
+    ALTER TABLE teen_patti_config_versions ADD CONSTRAINT teen_patti_config_limits_ck CHECK (
+      betting_duration_ms > 0 AND lock_duration_ms > 0 AND drawing_duration_ms > 0 AND result_duration_ms > 0
+      AND min_bet > 0 AND max_single_bet >= min_bet AND max_round_bet >= max_single_bet
+      AND rake_bps >= 0 AND rake_bps <= 2000
+    );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_chip_value_positive_ck') THEN
+    ALTER TABLE teen_patti_chip_value_versions ADD CONSTRAINT teen_patti_chip_value_positive_ck CHECK (amount > 0);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_round_number_positive_ck') THEN
+    ALTER TABLE teen_patti_rounds ADD CONSTRAINT teen_patti_round_number_positive_ck CHECK (round_number > 0);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_bet_amount_positive_ck') THEN
+    ALTER TABLE teen_patti_bets ADD CONSTRAINT teen_patti_bet_amount_positive_ck CHECK (amount > 0);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_settlement_payout_non_negative_ck') THEN
+    ALTER TABLE teen_patti_bet_settlements ADD CONSTRAINT teen_patti_settlement_payout_non_negative_ck CHECK (payout_amount >= 0);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_user_payout_non_negative_ck') THEN
+    ALTER TABLE teen_patti_user_payouts ADD CONSTRAINT teen_patti_user_payout_non_negative_ck CHECK (
+      winning_bet_count > 0 AND total_winning_stake > 0 AND total_payout > 0
+    );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_user_refund_positive_ck') THEN
+    ALTER TABLE teen_patti_user_refunds ADD CONSTRAINT teen_patti_user_refund_positive_ck CHECK (total_bet_amount > 0);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teen_patti_result_deal_attempts_ck') THEN
+    ALTER TABLE teen_patti_round_results ADD CONSTRAINT teen_patti_result_deal_attempts_ck CHECK (deal_attempt_count >= 1);
+  END IF;
+END $$;

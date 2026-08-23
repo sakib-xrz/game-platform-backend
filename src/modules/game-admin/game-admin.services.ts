@@ -13,6 +13,7 @@ import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
 import { GREEDY_GAME_CODE, GREEDY_SOCKET_ROOM } from '@/modules/greedy/greedy.constant';
 import type { CancelRoundBody, CreateGreedyConfigBody } from './game-admin.validation';
+import { isLegacyOptionImageUrl } from './game-admin.validation';
 import { createPendingApproval, markApprovalApplied, verifyApprovalPayloadHash } from '@/modules/admin/admin-approval.services';
 import type { AdminAuditContext } from '@/modules/admin/admin.services';
 import { writeAdminAudit } from '@/modules/admin/admin.services';
@@ -29,9 +30,14 @@ export const resolveOptionAssets = async (tx: Prisma.TransactionClient, options:
   if (assets.length !== asset_ids.length) throw new AppError(httpStatus.BAD_REQUEST, 'Every referenced option asset must be uploaded and ready');
   const by_id = new Map(assets.map((asset) => [asset.id, asset]));
   return options.map((option) => {
-    if (option.image_url && !option.asset_id) throw new AppError(httpStatus.BAD_REQUEST, 'Option artwork must come from a managed asset');
+    if (option.image_url && !option.asset_id && !isLegacyOptionImageUrl(option.image_url)) {
+      throw new AppError(httpStatus.BAD_REQUEST, 'Option artwork must come from a managed asset');
+    }
     if (option.asset_id && !by_id.get(option.asset_id)?.cdn_url) throw new AppError(httpStatus.BAD_REQUEST, 'Referenced option asset has no published CDN URL');
-    return { ...option, image_url: option.asset_id ? by_id.get(option.asset_id)!.cdn_url : null };
+    return {
+      ...option,
+      image_url: option.asset_id ? by_id.get(option.asset_id)!.cdn_url : (option.image_url ?? null),
+    };
   });
 };
 
@@ -115,15 +121,19 @@ const validateConfig = async (payload: CreateGreedyConfigBody) => {
     const payout_contribution_percent = total_weight ? Number((weight * numerator * 1_000_000n) / (total_weight * denominator)) / 10_000 : 0;
     return { code: option.code, probability_percent, payout_contribution_percent };
   });
-  const theoretical_return_percent = options.reduce((sum, option) => sum + option.payout_contribution_percent, 0);
+  const theoretical_return_percent = options.length
+    ? Math.max(...options.map((option) => option.payout_contribution_percent))
+    : 0;
   const asset_ids = [...new Set(payload.options.flatMap((option) => option.asset_id ? [option.asset_id] : []))];
   const assets = asset_ids.length ? await prisma.adminAsset.findMany({ where: { id: { in: asset_ids }, status: AdminAssetStatus.ready }, select: { id: true, cdn_url: true } }) : [];
   const ready_assets = new Map(assets.map((asset) => [asset.id, asset]));
   payload.options.forEach((option) => {
-    if (option.image_url && !option.asset_id) failures.push({ field: `options.${option.code}.image_url`, message: 'Option artwork must come from a managed asset' });
+    if (option.image_url && !option.asset_id && !isLegacyOptionImageUrl(option.image_url)) {
+      failures.push({ field: `options.${option.code}.image_url`, message: 'Option artwork must come from a managed asset' });
+    }
     if (option.asset_id && (!ready_assets.has(option.asset_id) || !ready_assets.get(option.asset_id)?.cdn_url)) failures.push({ field: `options.${option.code}.asset_id`, message: 'Referenced managed asset is not ready' });
   });
-  if (theoretical_return_percent > 100) failures.push({ field: 'options', message: 'Weighted theoretical return exceeds 100%' });
+  if (theoretical_return_percent > 100) failures.push({ field: 'options', message: 'An enabled option exceeds 100% theoretical return' });
   return {
     valid: theoretical_return_percent <= 100 && enabled.length >= 2 && failures.length === 0,
     failures,

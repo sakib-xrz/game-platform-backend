@@ -46,6 +46,9 @@ describe('admin security primitives', () => {
     expect(canAdminApprove('greedy.config.publish', AdminRole.game_operator, 'requester', 'game')).toBe(true);
     expect(canAdminApprove('greedy.config.publish', AdminRole.finance_operator, 'requester', 'finance')).toBe(false);
     expect(canAdminApprove('greedy.config.publish', AdminRole.super_admin, 'same', 'same')).toBe(false);
+    expect(canAdminApprove('teen_patti.config.publish', AdminRole.game_operator, 'requester', 'game')).toBe(true);
+    expect(canAdminApprove('teen_patti.config.publish', AdminRole.finance_operator, 'requester', 'finance')).toBe(false);
+    expect(canAdminApprove('teen_patti.round.cancel', AdminRole.game_operator, 'requester', 'ops')).toBe(true);
   });
 
   it('rejects tampered approval payloads', () => {

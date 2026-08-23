@@ -1,0 +1,1212 @@
+{
+  "info": {
+    "_postman_id": "f0322d7a-6e5d-442f-bfcb-6e6421091d93",
+    "name": "Lucky 77 Game API",
+    "description": "Lucky 77 REST collection (fixed multipliers: Apple/Watermelon 2x, 77 8x; 9-slot weighted spin).\n\n### Setup\n1. Import this collection and `Lucky_77_Game_Local.postman_environment.json`.\n2. Set `admin_email` / `admin_password` (seed defaults: admin@example.com / AdminPassword123).\n3. Run **Admin Login** first \u2014 it stores `admin_session_token`.\n4. Start API + worker. Resume Lucky 77, then Snapshot \u2192 Place Bet.\n\n### Notes\n- Place Bet returns **HTTP 201**.\n- Snapshot includes top-level `slot_map` (9 codes).\n- After reveal, round result includes `winning_slot_index` (0\u20138).\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 \u2014 Health",
+      "item": [
+        {
+          "name": "Live",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/health/live",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                "live"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"alive\", () => pm.expect(pm.response.json().success).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ready",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/health/ready",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"db+redis ready\", () => { pm.expect(d.database).to.eql(\"ready\"); pm.expect(d.redis).to.eql(\"ready\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 \u2014 Admin Auth",
+      "item": [
+        {
+          "name": "Admin Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Stores Bearer session token for all admin requests.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"password\": \"{{admin_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test(\"login ok\", () => pm.expect(json.success).to.eql(true));",
+                  "const token = json.data && json.data.session_token;",
+                  "pm.expect(token).to.be.ok;",
+                  "pm.collectionVariables.set(\"admin_session_token\", token);",
+                  "pm.environment.set(\"admin_session_token\", token);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 \u2014 Admin / Game Lifecycle",
+      "item": [
+        {
+          "name": "Get Lucky 77 Runtime",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/runtime",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "runtime"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const runtime = pm.response.json().data;",
+                  "if (runtime) {",
+                  "  pm.collectionVariables.set(\"runtime_status\", runtime.status || \"\");",
+                  "  if (runtime.active_config_version?.id) pm.collectionVariables.set(\"published_config_id\", runtime.active_config_version.id);",
+                  "  if (runtime.current_round?.id) {",
+                  "    pm.collectionVariables.set(\"current_round_id\", runtime.current_round.id);",
+                  "    pm.collectionVariables.set(\"current_round_number\", String(runtime.current_round.round_number ?? \"\"));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resume Lucky 77",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/resume",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "resume"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"resumed\", () => pm.expect(pm.response.json().success).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pause Lucky 77",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/pause",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "pause"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel Current Round",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/cancel-current-round",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "cancel-current-round"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"{{cancel_reason}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cancel accepted or conflict\", () => pm.expect([200,202,409]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 \u2014 Player / Snapshot",
+      "item": [
+        {
+          "name": "Snapshot",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/lucky-77/snapshot",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "lucky-77",
+                "snapshot"
+              ]
+            },
+            "description": "Captures round/option IDs, slot_map, and wallet balance."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.success).to.eql(true);",
+                  "const data = json.data;",
+                  "pm.test(\"slot_map has 9 slots\", () => pm.expect(data.slot_map).to.have.length(9));",
+                  "pm.test(\"3 options\", () => pm.expect(data.active_config.options).to.have.length(3));",
+                  "pm.collectionVariables.set(\"slot_map\", JSON.stringify(data.slot_map || []));",
+                  "const round = data.round;",
+                  "if (round) {",
+                  "  pm.collectionVariables.set(\"current_round_id\", round.id);",
+                  "  pm.collectionVariables.set(\"current_round_status\", round.status || \"\");",
+                  "  const option = (round.options || data.active_config.options || []).find(o => o.code === (pm.environment.get(\"bet_option_code\") || \"APPLE\"))",
+                  "    || (round.options || data.active_config.options || []).find(o => o.is_enabled !== false);",
+                  "  if (option) {",
+                  "    pm.collectionVariables.set(\"current_option_id\", option.id);",
+                  "    pm.collectionVariables.set(\"current_option_code\", option.code || \"\");",
+                  "    pm.collectionVariables.set(\"current_option_payout_multiplier\", option.payout_multiplier || \"\");",
+                  "  }",
+                  "  if (round.result) {",
+                  "    pm.collectionVariables.set(\"winning_slot_index\", String(round.result.winning_slot_index ?? \"\"));",
+                  "    pm.collectionVariables.set(\"winning_option_code\", round.result.winning_option?.code || \"\");",
+                  "  }",
+                  "}",
+                  "if (data.wallet) {",
+                  "  pm.collectionVariables.set(\"wallet_balance\", String(data.wallet.balance ?? \"\"));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 \u2014 Wallet",
+      "item": [
+        {
+          "name": "Credit Test Wallet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/wallets/adjust",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "wallets",
+                "adjust"
+              ]
+            },
+            "description": "Keep amount under wallet_adjustment_threshold (default 10000) to apply immediately.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"amount\": \"{{wallet_adjustment_amount}}\",\n  \"direction\": \"credit\",\n  \"reason\": \"{{wallet_adjustment_reason}}\",\n  \"ticket_reference\": \"postman-l77-{{$timestamp}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"adjusted or pending\", () => pm.expect([200,202]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get My Wallet",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/wallets/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "wallets",
+                "me"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wallet Ledger",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/wallets/me/transactions?page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "wallets",
+                "me",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 \u2014 Betting",
+      "item": [
+        {
+          "name": "Place Bet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/lucky-77/bets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "lucky-77",
+                "bets"
+              ]
+            },
+            "description": "Requires Snapshot first while status is betting_open. Expects 201 Created.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"round_id\": \"{{current_round_id}}\",\n  \"option_id\": \"{{current_option_id}}\",\n  \"amount\": \"{{bet_amount}}\",\n  \"client_request_id\": \"{{$guid}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.success).to.eql(true);",
+                  "const data = json.data;",
+                  "pm.collectionVariables.set(\"bet_id\", data.bet_id);",
+                  "pm.collectionVariables.set(\"last_client_request_id\", data.client_request_id);",
+                  "pm.collectionVariables.set(\"wallet_balance\", String(data.wallet_balance ?? \"\"));",
+                  "pm.collectionVariables.set(\"last_bet_round_id\", data.round_id);",
+                  "pm.collectionVariables.set(\"last_bet_option_id\", data.option_id);",
+                  "pm.collectionVariables.set(\"last_bet_amount\", String(data.amount ?? \"\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Replay Same Bet (Idempotency)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/lucky-77/bets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "lucky-77",
+                "bets"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"round_id\": \"{{last_bet_round_id}}\",\n  \"option_id\": \"{{last_bet_option_id}}\",\n  \"amount\": \"{{last_bet_amount}}\",\n  \"client_request_id\": \"{{last_client_request_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201 or 200\", () => pm.expect([200,201]).to.include(pm.response.code));",
+                  "const data = pm.response.json().data;",
+                  "pm.test(\"same bet_id\", () => pm.expect(data.bet_id).to.eql(pm.collectionVariables.get(\"bet_id\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My Bet History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/lucky-77/my-bets?page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "lucky-77",
+                "my-bets"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"data is array\", () => pm.expect(pm.response.json().data).to.be.an(\"array\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 \u2014 Rounds & Results",
+      "item": [
+        {
+          "name": "Public Round History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/lucky-77/rounds?page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "lucky-77",
+                "rounds"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().data;",
+                  "if (Array.isArray(items) && items[0]?.id) pm.collectionVariables.set(\"history_round_id\", items[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Round Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{user_id}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/games/lucky-77/rounds/{{history_round_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "games",
+                "lucky-77",
+                "rounds",
+                "{{history_round_id}}"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const round = pm.response.json().data;",
+                  "if (round?.result) {",
+                  "  pm.collectionVariables.set(\"winning_slot_index\", String(round.result.winning_slot_index ?? \"\"));",
+                  "  pm.collectionVariables.set(\"winning_option_code\", round.result.winning_option?.code || \"\");",
+                  "  pm.test(\"winning_slot_index present\", () => pm.expect(round.result.winning_slot_index).to.be.a(\"number\"));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 \u2014 Admin / Config",
+      "item": [
+        {
+          "name": "List Config Versions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/config-versions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "config-versions"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Draft Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/config-versions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "config-versions"
+              ]
+            },
+            "description": "Exactly 3 options with payouts/weights. No rake_bps.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"betting_duration_ms\": {{betting_duration_ms}},\n  \"lock_duration_ms\": {{lock_duration_ms}},\n  \"drawing_duration_ms\": {{drawing_duration_ms}},\n  \"result_duration_ms\": {{result_duration_ms}},\n  \"min_bet\": \"{{min_bet}}\",\n  \"max_single_bet\": \"{{max_single_bet}}\",\n  \"max_round_bet\": \"{{max_round_bet}}\",\n  \"notes\": \"Lucky 77 draft from Postman at {{$isoTimestamp}}\",\n  \"chip_values\": [\n    { \"amount\": \"10\", \"display_order\": 1, \"is_enabled\": true },\n    { \"amount\": \"50\", \"display_order\": 2, \"is_enabled\": true },\n    { \"amount\": \"100\", \"display_order\": 3, \"is_enabled\": true },\n    { \"amount\": \"500\", \"display_order\": 4, \"is_enabled\": true },\n    { \"amount\": \"1000\", \"display_order\": 5, \"is_enabled\": true },\n    { \"amount\": \"5000\", \"display_order\": 6, \"is_enabled\": true }\n  ],\n  \"options\": [\n    { \"code\": \"APPLE\", \"name\": \"Apple\", \"display_order\": 1, \"payout_numerator\": \"2\", \"payout_denominator\": \"1\", \"probability_weight\": \"4\", \"is_enabled\": true, \"image_url\": null },\n    { \"code\": \"WATERMELON\", \"name\": \"Watermelon\", \"display_order\": 2, \"payout_numerator\": \"2\", \"payout_denominator\": \"1\", \"probability_weight\": \"4\", \"is_enabled\": true, \"image_url\": null },\n    { \"code\": \"SEVENTY_SEVEN\", \"name\": \"Lucky 77\", \"display_order\": 3, \"payout_numerator\": \"8\", \"payout_denominator\": \"1\", \"probability_weight\": \"1\", \"is_enabled\": true, \"image_url\": null }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200 or 201\", () => pm.expect([200,201]).to.include(pm.response.code));",
+                  "const data = pm.response.json().data;",
+                  "if (data?.id) pm.collectionVariables.set(\"draft_config_id\", data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish Draft Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/config-versions/{{draft_config_id}}/publish",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "config-versions",
+                "{{draft_config_id}}",
+                "publish"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"publish result\", () => pm.expect([200,202,409]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/overview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "overview"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_session_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/games/lucky-77/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "games",
+                "lucky-77",
+                "health"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "admin_session_token",
+      "value": ""
+    },
+    {
+      "key": "current_round_id",
+      "value": ""
+    },
+    {
+      "key": "current_option_id",
+      "value": ""
+    },
+    {
+      "key": "bet_id",
+      "value": ""
+    },
+    {
+      "key": "history_round_id",
+      "value": ""
+    },
+    {
+      "key": "draft_config_id",
+      "value": ""
+    },
+    {
+      "key": "slot_map",
+      "value": ""
+    },
+    {
+      "key": "winning_slot_index",
+      "value": ""
+    }
+  ]
+}
