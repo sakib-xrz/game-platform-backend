@@ -32,4 +32,17 @@ const adminAdjustWallet = catchAsync(async (req: Request, res: Response) => {
   sendResponse(res, { statusCode: data.status === 'pending_approval' ? 202 : 200, success: true, message: data.status === 'pending_approval' ? 'Wallet adjustment is pending approval' : 'Wallet adjusted', data });
 });
 
-export default { getMyWallet, getTransactions, adminAdjustWallet };
+const listAdminWallets = catchAsync(async (req: Request, res: Response) => {
+  const page = Number(req.query.page || 1);
+  const limit = Number(req.query.limit || 20);
+  const result = await WalletService.listAdminWallets(String(req.query.search || ''), page, limit);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Player wallets fetched',
+    meta: { page: result.page, limit: result.limit, total: result.total },
+    data: result.items,
+  });
+});
+
+export default { getMyWallet, getTransactions, listAdminWallets, adminAdjustWallet };

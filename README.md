@@ -218,6 +218,8 @@ Base URL: `/api/v1`
 | GET | `/wallets/me` | Shared platform wallet |
 | GET | `/wallets/me/transactions?page=1&limit=20` | Immutable wallet ledger history |
 
+Admin wallet operations additionally expose `GET /admin/wallets?search=<user_id>&page=1&limit=20` for permission-protected player selection and `POST /admin/wallets/adjust` for audited credit/debit adjustments.
+
 ### Place bet
 
 ```http

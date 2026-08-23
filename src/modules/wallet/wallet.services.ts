@@ -159,6 +159,36 @@ const getTransactions = async (user_id: string, page = 1, limit = 20) => {
   return { items, total, ...pagination };
 };
 
+const listAdminWallets = async (search = '', page = 1, limit = 20) => {
+  const pagination = getPagination(page, limit);
+  const normalized_search = search.trim();
+  const where: Prisma.WalletWhereInput = {
+    currency: { code: DEFAULT_CURRENCY_CODE },
+    ...(normalized_search
+      ? { user_id: { contains: normalized_search, mode: 'insensitive' } }
+      : {}),
+  };
+  const [items, total] = await prisma.$transaction([
+    prisma.wallet.findMany({
+      where,
+      select: {
+        id: true,
+        user_id: true,
+        balance: true,
+        version: true,
+        created_at: true,
+        updated_at: true,
+        currency: { select: { code: true, name: true, symbol: true } },
+      },
+      orderBy: [{ updated_at: 'desc' }, { user_id: 'asc' }],
+      skip: pagination.skip,
+      take: pagination.limit,
+    }),
+    prisma.wallet.count({ where }),
+  ]);
+  return { items, total, ...pagination };
+};
+
 const adminAdjustWallet = async (payload: AdminAdjustWalletBody, context: AdminAuditContext = {}) => {
   const unsigned_amount = BigInt(payload.amount.startsWith('-') ? payload.amount.slice(1) : payload.amount);
   const amount = payload.direction === 'debit' || (!payload.direction && payload.amount.startsWith('-')) ? -unsigned_amount : unsigned_amount;
@@ -258,6 +288,7 @@ const adminAdjustWallet = async (payload: AdminAdjustWalletBody, context: AdminA
 const WalletService = {
   getMyWallet,
   getTransactions,
+  listAdminWallets,
   adminAdjustWallet,
 };
 
