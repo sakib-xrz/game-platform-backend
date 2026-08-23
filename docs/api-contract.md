@@ -225,6 +225,18 @@ High-risk actions (publish config, large wallet adjust, round cancel) use the ap
 
 ---
 
+## Game bots (internal)
+
+Live game rooms may include **synthetic bot players** that:
+
+- Appear in public game snapshots with display names and avatars
+- Do **not** use wallets or write coin ledger entries
+- Are **excluded** from admin metrics, round bet lists, and player summary APIs
+
+When human players participate, round outcomes may use an internal biased selector so bot-favored results occur roughly 85% of the time. Admin audit fields remain integrity hashes for stored results, not proof of neutral odds.
+
+---
+
 ## Quick reference: which API for what?
 
 | Your task | Doc |

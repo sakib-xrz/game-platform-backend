@@ -227,7 +227,7 @@ describe('Teen Patti bet transaction contract', () => {
         round_id,
         option_id: hand_a,
         user_id: 'player-1',
-        display_name: null,
+        display_name: 'Player ayer-1',
         avatar_url: null,
         amount: '500',
         accepted_at: accepted_at.toISOString(),

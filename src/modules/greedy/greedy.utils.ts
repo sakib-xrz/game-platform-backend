@@ -1,7 +1,9 @@
 import { Prisma } from '@/generated/prisma/client';
 import prisma from '@/lib/prisma';
+import { resolveGameIdentitySync } from '@/modules/game-bot/bot-identity';
 import type {
   GreedyBetPlacedPayload,
+  GreedyPublicIdentity,
   GreedyTopWinner,
 } from './greedy.types';
 
@@ -137,7 +139,7 @@ export const buildGreedyBetPlacedPayload = (
     first_bet_at: Date;
     last_bet_at: Date;
   },
-  user_id: string,
+  bettor: GreedyPublicIdentity,
 ): GreedyBetPlacedPayload => ({
   bet_id: bet.id,
   round_id: bet.round_id,
@@ -148,7 +150,7 @@ export const buildGreedyBetPlacedPayload = (
   bet_count: bet.bet_count,
   first_bet_at: bet.first_bet_at.toISOString(),
   last_bet_at: bet.last_bet_at.toISOString(),
-  bettor: { user_id, display_name: null, avatar_url: null },
+  bettor,
 });
 
 /**
@@ -190,16 +192,19 @@ export const rankGreedyWinnerAggregates = (
     }))
     .sort(compareGreedyWinnerRankings)
     .slice(0, Math.max(0, limit))
-    .map((winner, index) => ({
-      rank: index + 1,
-      user_id: winner.user_id,
-      display_name: null,
-      avatar_url: null,
-      winning_stake: winner.winning_stake.toString(),
-      bet_count: winner.bet_count,
-      total_payout: winner.total_payout.toString(),
-      first_bet_at: winner.first_bet_at.toISOString(),
-    }));
+    .map((winner, index) => {
+      const identity = resolveGameIdentitySync(winner.user_id);
+      return {
+        rank: index + 1,
+        user_id: winner.user_id,
+        display_name: identity.display_name,
+        avatar_url: identity.avatar_url,
+        winning_stake: winner.winning_stake.toString(),
+        bet_count: winner.bet_count,
+        total_payout: winner.total_payout.toString(),
+        first_bet_at: winner.first_bet_at.toISOString(),
+      };
+    });
 
 /** Aggregate all winning bet records per user before applying the multiplier. */
 export const buildGreedyTopWinners = (

@@ -81,3 +81,45 @@ export const dealUniqueWinner = (options: DeckOption[]): DealResult => {
 
   throw new Error('Teen Patti deal could not produce a unique winner');
 };
+
+export const dealWithWinningOption = (
+  options: DeckOption[],
+  forcedWinnerOptionId: string,
+): DealResult => {
+  if (options.length !== 3) throw new Error('Teen Patti requires exactly three decks');
+
+  const forced_index = options.findIndex((option) => option.id === forcedWinnerOptionId);
+  if (forced_index === -1) {
+    throw new Error('Teen Patti forced winner option was not found');
+  }
+
+  const entropy_parts: Buffer[] = [];
+  for (let attempt = 1; attempt <= TEEN_PATTI_MAX_DEAL_ATTEMPTS; attempt += 1) {
+    const shuffled = shuffle(fullDeck());
+    entropy_parts.push(shuffled.entropy);
+    const hands: DealtHand[] = options.map((option, index) => {
+      const start = index * 3;
+      const cards: [CardCode, CardCode, CardCode] = [
+        shuffled.cards[start]!,
+        shuffled.cards[start + 1]!,
+        shuffled.cards[start + 2]!,
+      ];
+      return {
+        option_id: option.id,
+        option_code: option.code,
+        ...evaluateHand(cards),
+      };
+    });
+    const winner_index = uniqueHighestIndex(hands);
+    if (winner_index !== null && winner_index === forced_index) {
+      return {
+        winner_index,
+        hands,
+        entropy_digest: sha256(Buffer.concat(entropy_parts)),
+        deal_attempt_count: attempt,
+      };
+    }
+  }
+
+  throw new Error('Teen Patti deal could not produce the forced winner');
+};

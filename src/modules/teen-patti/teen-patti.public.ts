@@ -64,14 +64,18 @@ export const buildTeenPattiBetPlacedPayload = (
     player_count: number;
     round_bet_count: number;
   },
-  user_id: string,
+  bettor: {
+    user_id: string;
+    display_name: string | null;
+    avatar_url: string | null;
+  },
 ): TeenPattiBetPlacedPayload => ({
   bet_id: bet.id,
   round_id: bet.round_id,
   option_id: bet.option_id,
-  user_id,
-  display_name: null,
-  avatar_url: null,
+  user_id: bettor.user_id,
+  display_name: bettor.display_name,
+  avatar_url: bettor.avatar_url,
   amount: bet.amount.toString(),
   accepted_at: bet.accepted_at.toISOString(),
   user_total_amount: bet.user_total_amount.toString(),
