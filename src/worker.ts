@@ -1,6 +1,6 @@
 import http from 'http';
 import config from '@/config';
-import prisma from '@/lib/prisma';
+import prisma, { isTransientDatabaseError } from '@/lib/prisma';
 import {
   connectRedis,
   disconnectRedis,
@@ -63,23 +63,33 @@ const refreshLeadership = (): Promise<void> => {
   if (lease_refresh_task) return lease_refresh_task;
 
   const task = (async () => {
-    try {
-      [greedy_leader, teen_patti_leader, lucky_77_leader, greedy_classic_leader] =
-        await Promise.all([
-          acquireOrRenewLease(GREEDY_LEASE_KEY, config.worker_instance_id),
-          acquireOrRenewLease(TEEN_PATTI_LEASE_KEY, config.worker_instance_id),
-          acquireOrRenewLease(LUCKY_77_LEASE_KEY, config.worker_instance_id),
-          acquireOrRenewLease(
-            GREEDY_CLASSIC_LEASE_KEY,
-            config.worker_instance_id,
-          ),
-        ]);
-    } catch (error) {
-      greedy_leader = false;
-      teen_patti_leader = false;
-      lucky_77_leader = false;
-      greedy_classic_leader = false;
-      logger.error('game_worker_lease_refresh_failed', { error });
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        [greedy_leader, teen_patti_leader, lucky_77_leader, greedy_classic_leader] =
+          await Promise.all([
+            acquireOrRenewLease(GREEDY_LEASE_KEY, config.worker_instance_id),
+            acquireOrRenewLease(TEEN_PATTI_LEASE_KEY, config.worker_instance_id),
+            acquireOrRenewLease(LUCKY_77_LEASE_KEY, config.worker_instance_id),
+            acquireOrRenewLease(
+              GREEDY_CLASSIC_LEASE_KEY,
+              config.worker_instance_id,
+            ),
+          ]);
+        return;
+      } catch (error) {
+        const retryable = isTransientDatabaseError(error) && attempt < 3;
+        if (retryable) {
+          logger.warn('game_worker_lease_refresh_retrying', { attempt, error });
+          await prisma.$connect().catch(() => undefined);
+          await sleep(attempt * 250);
+          continue;
+        }
+        greedy_leader = false;
+        teen_patti_leader = false;
+        lucky_77_leader = false;
+        greedy_classic_leader = false;
+        logger.error('game_worker_lease_refresh_failed', { error });
+      }
     }
   })();
 
@@ -123,34 +133,37 @@ const main = async (): Promise<void> => {
       // Wait for all ticks to finish before the next loop so a fast failure
       // cannot leave another game running in the background. Demote only the
       // failed game's leadership; an unrelated game keeps progressing.
-      if (greedy_tick.status === 'rejected') {
+      const noteTickFailure = (
+        game_code: string,
+        result: PromiseSettledResult<void>,
+        demote: () => void,
+      ) => {
+        if (result.status !== 'rejected') return;
+        if (isTransientDatabaseError(result.reason)) {
+          logger.warn('game_worker_tick_retryable', {
+            game_code,
+            error: result.reason,
+          });
+          return;
+        }
+        demote();
+        logger.error('game_worker_tick_failed', {
+          game_code,
+          error: result.reason,
+        });
+      };
+      noteTickFailure('GREEDY', greedy_tick, () => {
         greedy_leader = false;
-        logger.error('game_worker_tick_failed', {
-          game_code: 'GREEDY',
-          error: greedy_tick.reason,
-        });
-      }
-      if (teen_patti_tick.status === 'rejected') {
+      });
+      noteTickFailure('TEEN_PATTI', teen_patti_tick, () => {
         teen_patti_leader = false;
-        logger.error('game_worker_tick_failed', {
-          game_code: 'TEEN_PATTI',
-          error: teen_patti_tick.reason,
-        });
-      }
-      if (lucky_77_tick.status === 'rejected') {
+      });
+      noteTickFailure('LUCKY_77', lucky_77_tick, () => {
         lucky_77_leader = false;
-        logger.error('game_worker_tick_failed', {
-          game_code: 'LUCKY_77',
-          error: lucky_77_tick.reason,
-        });
-      }
-      if (greedy_classic_tick.status === 'rejected') {
+      });
+      noteTickFailure('GREEDY_CLASSIC', greedy_classic_tick, () => {
         greedy_classic_leader = false;
-        logger.error('game_worker_tick_failed', {
-          game_code: 'GREEDY_CLASSIC',
-          error: greedy_classic_tick.reason,
-        });
-      }
+      });
     } catch (error) {
       logger.error('game_worker_loop_failed', { error });
       greedy_leader = false;

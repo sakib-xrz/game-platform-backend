@@ -14,7 +14,7 @@ const actorRole = (req: Request): AdminRole | undefined => req.admin?.role;
 const send = (res: Response, data: unknown, message: string, statusCode: number = httpStatus.OK) => sendResponse(res, { statusCode, success: true, message, data });
 
 const getConfig = catchAsync(async (req, res) => send(res, await TeenPattiAdminOpsService.getConfig(String(req.params.config_id)), 'Teen Patti config fetched'));
-const updateDraft = catchAsync(async (req, res) => send(res, await TeenPattiAdminOpsService.updateDraft(String(req.params.config_id), req.body as CreateTeenPattiConfigBody, requestAuditContext(req)), 'Teen Patti config draft updated'));
+const updateDraft = catchAsync(async (req, res) => send(res, await TeenPattiAdminOpsService.updateDraft(String(req.params.config_id), req.body as CreateTeenPattiConfigBody, requestAuditContext(req)), 'Teen Patti config updated'));
 const cloneConfig = catchAsync(async (req, res) => send(res, await TeenPattiAdminOpsService.cloneConfig(String(req.params.config_id), requestAuditContext(req)), 'Teen Patti config draft cloned', httpStatus.CREATED));
 const listRounds = catchAsync(async (req, res) => {
   const result = await TeenPattiAdminOpsService.listRounds(req.query as unknown as OpsRoundListQuery, actorRole(req));

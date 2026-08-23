@@ -101,37 +101,121 @@ const updateDraft = async (config_id: string, payload: CreateTeenPattiConfigBody
     const options = await resolveTeenPattiOptionAssets(tx, payload.options);
     const target = await tx.teenPattiConfigVersion.findFirst({
       where: { id: config_id, game_id: game.id },
-      include: { options: true, chip_values: true, _count: { select: { rounds: true, results: true } } },
+      include: { options: true, chip_values: true },
     });
     if (!target) throw new AppError(httpStatus.NOT_FOUND, 'Config version not found');
-    if (target.status !== ConfigVersionStatus.draft) throw new AppError(httpStatus.CONFLICT, 'Only draft configs can be edited');
-    if (target._count.rounds || target._count.results) throw new AppError(httpStatus.CONFLICT, 'A config referenced by a round cannot be edited');
+    if (target.status !== ConfigVersionStatus.draft && target.status !== ConfigVersionStatus.published) {
+      throw new AppError(httpStatus.CONFLICT, 'Only draft or published configs can be edited');
+    }
 
-    await tx.teenPattiChipValueVersion.deleteMany({ where: { config_version_id: target.id } });
-    await tx.teenPattiOptionVersion.deleteMany({ where: { config_version_id: target.id } });
-    const updated = await tx.teenPattiConfigVersion.update({
-      where: { id: target.id },
-      data: {
-        betting_duration_ms: payload.betting_duration_ms,
-        lock_duration_ms: payload.lock_duration_ms,
-        drawing_duration_ms: payload.drawing_duration_ms,
-        result_duration_ms: payload.result_duration_ms,
-        min_bet: BigInt(payload.min_bet),
-        max_single_bet: BigInt(payload.max_single_bet),
-        max_round_bet: BigInt(payload.max_round_bet),
-        rake_bps: payload.rake_bps,
-        notes: payload.notes,
-        options: { create: options.map((item) => ({
-          code: item.code, name: item.name, image_url: item.image_url ?? null, asset_id: item.asset_id ?? null, display_order: item.display_order,
-          is_enabled: item.is_enabled,
-        })) },
-        chip_values: { create: payload.chip_values.map((item) => ({ amount: BigInt(item.amount), display_order: item.display_order, is_enabled: item.is_enabled })) },
-      },
-      include: { options: { orderBy: { display_order: 'asc' } }, chip_values: { orderBy: { display_order: 'asc' } } },
+    const referencedRound = await tx.teenPattiRound.findFirst({
+      where: { config_version_id: target.id },
+      select: { id: true },
     });
+    const hasRoundRefs = Boolean(referencedRound);
+    const rootData = {
+      betting_duration_ms: payload.betting_duration_ms,
+      lock_duration_ms: payload.lock_duration_ms,
+      drawing_duration_ms: payload.drawing_duration_ms,
+      result_duration_ms: payload.result_duration_ms,
+      min_bet: BigInt(payload.min_bet),
+      max_single_bet: BigInt(payload.max_single_bet),
+      max_round_bet: BigInt(payload.max_round_bet),
+      rake_bps: payload.rake_bps,
+      notes: payload.notes,
+    };
+
+    let updated;
+
+    if (hasRoundRefs) {
+      const existingCodes = new Set(target.options.map((item) => item.code));
+      const payloadCodes = new Set(options.map((item) => item.code));
+      if (existingCodes.size !== payloadCodes.size || [...existingCodes].some((code) => !payloadCodes.has(code))) {
+        throw new AppError(httpStatus.CONFLICT, 'Option codes cannot be changed on a config referenced by rounds');
+      }
+
+      const orderChanged = options.some((item) => {
+        const existing = target.options.find((option) => option.code === item.code);
+        return existing?.display_order !== item.display_order;
+      });
+      if (orderChanged) {
+        for (const [index, item] of options.entries()) {
+          const existing = target.options.find((option) => option.code === item.code);
+          if (!existing) throw new AppError(httpStatus.CONFLICT, `Option ${item.code} not found`);
+          await tx.teenPattiOptionVersion.update({
+            where: { id: existing.id },
+            data: { display_order: existing.display_order + 10000 + index },
+          });
+        }
+      }
+      for (const item of options) {
+        const existing = target.options.find((option) => option.code === item.code);
+        if (!existing) throw new AppError(httpStatus.CONFLICT, `Option ${item.code} not found`);
+        await tx.teenPattiOptionVersion.update({
+          where: { id: existing.id },
+          data: {
+            name: item.name,
+            image_url: item.image_url ?? null,
+            asset_id: item.asset_id ?? null,
+            display_order: item.display_order,
+            is_enabled: item.is_enabled,
+          },
+        });
+      }
+
+      await tx.teenPattiChipValueVersion.deleteMany({ where: { config_version_id: target.id } });
+      if (payload.chip_values.length) {
+        await tx.teenPattiChipValueVersion.createMany({
+          data: payload.chip_values.map((item) => ({
+            config_version_id: target.id,
+            amount: BigInt(item.amount),
+            display_order: item.display_order,
+            is_enabled: item.is_enabled,
+          })),
+        });
+      }
+
+      updated = await tx.teenPattiConfigVersion.update({
+        where: { id: target.id },
+        data: rootData,
+        include: { options: { orderBy: { display_order: 'asc' } }, chip_values: { orderBy: { display_order: 'asc' } } },
+      });
+    } else {
+      await tx.teenPattiChipValueVersion.deleteMany({ where: { config_version_id: target.id } });
+      await tx.teenPattiOptionVersion.deleteMany({ where: { config_version_id: target.id } });
+      updated = await tx.teenPattiConfigVersion.update({
+        where: { id: target.id },
+        data: {
+          ...rootData,
+          options: { create: options.map((item) => ({
+            code: item.code, name: item.name, image_url: item.image_url ?? null, asset_id: item.asset_id ?? null, display_order: item.display_order,
+            is_enabled: item.is_enabled,
+          })) },
+          chip_values: { create: payload.chip_values.map((item) => ({ amount: BigInt(item.amount), display_order: item.display_order, is_enabled: item.is_enabled })) },
+        },
+        include: { options: { orderBy: { display_order: 'asc' } }, chip_values: { orderBy: { display_order: 'asc' } } },
+      });
+    }
+
+    if (target.status === ConfigVersionStatus.published) {
+      const runtime = await tx.teenPattiRuntimeState.findUnique({ where: { game_id: game.id } });
+      if (runtime?.active_config_version_id === target.id) {
+        await tx.teenPattiRuntimeState.update({ where: { game_id: game.id }, data: { revision: { increment: 1 } } });
+        await tx.outboxEvent.create({
+          data: {
+            aggregate_type: 'teen_patti_config_version',
+            aggregate_id: target.id,
+            event_type: 'teen_patti.config.updated',
+            socket_room: TEEN_PATTI_SOCKET_ROOM,
+            payload: { config_id: target.id, version: target.version },
+          },
+        });
+      }
+    }
+
     await writeAdminAudit(tx, { ...context, outcome: 'success' }, { action: 'teen_patti.config.updated', entity_type: 'teen_patti_config_version', entity_id: target.id, old_values: toConfigJson(target), new_values: toConfigJson(updated) });
     return updated;
-  });
+  }, { maxWait: 5000, timeout: 15000 });
 
 const cloneConfig = async (config_id: string, context: AdminAuditContext = {}) =>
   prisma.$transaction(async (tx) => {

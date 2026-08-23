@@ -2,6 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import prisma from '@/lib/prisma';
 
 const LEASE_SECONDS = 5;
+const ensured_lease_keys = new Set<string>();
 
 export const acquireOrRenewLease = async (
   lease_key: string,
@@ -9,16 +10,19 @@ export const acquireOrRenewLease = async (
 ): Promise<boolean> => {
   // Ensure the row exists. The actual lease decision below is a single atomic
   // PostgreSQL UPDATE and uses the database clock, not an application clock.
-  await prisma.workerLease.upsert({
-    where: { lease_key },
-    create: {
-      lease_key,
-      owner_id,
-      lease_until: new Date(0),
-      heartbeat_at: new Date(0),
-    },
-    update: {},
-  });
+  if (!ensured_lease_keys.has(lease_key)) {
+    await prisma.workerLease.upsert({
+      where: { lease_key },
+      create: {
+        lease_key,
+        owner_id,
+        lease_until: new Date(0),
+        heartbeat_at: new Date(0),
+      },
+      update: {},
+    });
+    ensured_lease_keys.add(lease_key);
+  }
 
   const rows = await prisma.$queryRaw<Array<{ owner_id: string }>>(Prisma.sql`
     UPDATE worker_leases
