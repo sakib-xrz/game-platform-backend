@@ -16,7 +16,10 @@ const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   database_url: process.env.DATABASE_URL || '',
   redis_url: process.env.REDIS_URL || 'redis://localhost:6379',
-  cors_origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  cors_origin:
+    process.env.CORS_ORIGIN ||
+    'http://localhost:3000' ||
+    'https://game.maxlived.net',
   admin_api_key: process.env.ADMIN_API_KEY || '',
   allow_dev_identity_header:
     (process.env.ALLOW_DEV_IDENTITY_HEADER || 'false').toLowerCase() === 'true',
