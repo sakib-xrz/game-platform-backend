@@ -6,12 +6,18 @@ import type { AuthenticatedAdmin } from '@/modules/admin/admin.types';
 import { writeAdminAudit, type AdminAuditContext } from '@/modules/admin/admin.services';
 import type { CreatePlatformAppBody, UpdatePlatformAppBody } from './platform-app.validation';
 import { normalizePackageName, normalizeShaKey } from './platform-app.validation';
+import {
+  generatePlatformSigningSecret,
+  maskSigningSecret,
+} from '@/utils/platform-signature';
 
 const platformAppSelect = {
   id: true,
   app_name: true,
   package_name: true,
   sha_key: true,
+  signing_secret: true,
+  signing_secret_previous: true,
   status: true,
   created_by_admin_id: true,
   created_at: true,
@@ -20,10 +26,21 @@ const platformAppSelect = {
 
 const serializePlatformApp = (
   app: Prisma.PlatformAppGetPayload<{ select: typeof platformAppSelect }>,
+  options: { reveal_signing_secret?: boolean } = {},
 ) => ({
-  ...app,
+  id: app.id,
+  app_name: app.app_name,
+  package_name: app.package_name,
+  sha_key: app.sha_key,
+  signing_secret_preview: maskSigningSecret(app.signing_secret),
+  has_rotated_signing_secret: Boolean(app.signing_secret_previous),
+  status: app.status,
+  created_by_admin_id: app.created_by_admin_id,
   created_at: app.created_at.toISOString(),
   updated_at: app.updated_at.toISOString(),
+  ...(options.reveal_signing_secret
+    ? { signing_secret: app.signing_secret }
+    : {}),
 });
 
 const findPlatformAppOrThrow = async (app_id: string) => {
@@ -42,7 +59,7 @@ const listPlatformApps = async () => {
     select: platformAppSelect,
     orderBy: [{ status: 'asc' }, { app_name: 'asc' }],
   });
-  return apps.map(serializePlatformApp);
+  return apps.map((app) => serializePlatformApp(app));
 };
 
 const getPlatformApp = async (app_id: string) =>
@@ -65,11 +82,13 @@ const createPlatformApp = async (
   }
 
   const app = await prisma.$transaction(async (tx) => {
+    const signing_secret = generatePlatformSigningSecret();
     const created = await tx.platformApp.create({
       data: {
         app_name: body.app_name.trim(),
         package_name,
         sha_key,
+        signing_secret,
         status: body.status === 'disabled' ? PlatformAppStatus.disabled : PlatformAppStatus.active,
         created_by_admin_id: admin.id,
       },
@@ -85,13 +104,14 @@ const createPlatformApp = async (
         package_name: created.package_name,
         sha_key: created.sha_key,
         status: created.status,
+        signing_secret_preview: maskSigningSecret(signing_secret),
       },
     });
 
     return created;
   });
 
-  return serializePlatformApp(app);
+  return serializePlatformApp(app, { reveal_signing_secret: true });
 };
 
 const updatePlatformApp = async (
@@ -173,12 +193,56 @@ const deletePlatformApp = async (app_id: string, context: AdminAuditContext) => 
   });
 };
 
+const regenerateSigningSecret = async (
+  admin: AuthenticatedAdmin,
+  app_id: string,
+  context: AdminAuditContext,
+) => {
+  const existing = await prisma.platformApp.findUnique({
+    where: { id: app_id },
+    select: platformAppSelect,
+  });
+  if (!existing) {
+    throw new AppError(httpStatus.NOT_FOUND, 'Platform app not found');
+  }
+
+  const signing_secret = generatePlatformSigningSecret();
+  const updated = await prisma.$transaction(async (tx) => {
+    const app = await tx.platformApp.update({
+      where: { id: app_id },
+      data: {
+        signing_secret_previous: existing.signing_secret,
+        signing_secret: signing_secret,
+      },
+      select: platformAppSelect,
+    });
+
+    await writeAdminAudit(tx, context, {
+      action: 'platform_app.signing_secret.regenerate',
+      entity_type: 'platform_app',
+      entity_id: app.id,
+      old_values: {
+        signing_secret_preview: maskSigningSecret(existing.signing_secret),
+      },
+      new_values: {
+        signing_secret_preview: maskSigningSecret(signing_secret),
+        rotated_by_admin_id: admin.id,
+      },
+    });
+
+    return app;
+  });
+
+  return serializePlatformApp(updated, { reveal_signing_secret: true });
+};
+
 const PlatformAppService = {
   listPlatformApps,
   getPlatformApp,
   createPlatformApp,
   updatePlatformApp,
   deletePlatformApp,
+  regenerateSigningSecret,
 };
 
 export default PlatformAppService;

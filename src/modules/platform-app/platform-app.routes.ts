@@ -47,5 +47,12 @@ PlatformAppRoutes.delete(
   validateRequest(platformAppIdSchema),
   PlatformAppController.deletePlatformApp,
 );
+PlatformAppRoutes.post(
+  '/:app_id/regenerate-signing-secret',
+  requireAdminPermission('platform.app.manage'),
+  requireAdminIdempotency('platform.app.signing_secret.regenerate'),
+  validateRequest(platformAppIdSchema),
+  PlatformAppController.regenerateSigningSecret,
+);
 
 export default PlatformAppRoutes;

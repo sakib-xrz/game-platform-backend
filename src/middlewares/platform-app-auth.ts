@@ -3,10 +3,12 @@ import httpStatus from 'http-status';
 import { PlatformAppStatus } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
+import { normalizePackageName } from '@/modules/platform-app/platform-app.validation';
 import {
-  normalizePackageName,
-  normalizeShaKey,
-} from '@/modules/platform-app/platform-app.validation';
+  assertPlatformTimestampFresh,
+  parsePlatformTimestamp,
+  verifyPlatformRequestSignature,
+} from '@/utils/platform-signature';
 
 export type AuthenticatedPlatformApp = {
   id: string;
@@ -16,28 +18,60 @@ export type AuthenticatedPlatformApp = {
   status: PlatformAppStatus;
 };
 
-const readCredential = (req: Request, header: string, bodyKey: string): string | undefined => {
-  const header_value = req.header(header)?.trim();
-  if (header_value) return header_value;
-  const body_value = req.body?.[bodyKey];
-  return typeof body_value === 'string' ? body_value.trim() : undefined;
+const readHeader = (req: Request, name: string): string | undefined =>
+  req.header(name)?.trim() || undefined;
+
+const resolveRequestPath = (req: Request): string => {
+  const original = req.originalUrl.split('?')[0] || req.path;
+  return original.startsWith('/') ? original : `/${original}`;
 };
 
-const platformAppAuth = async (req: Request, _res: Response, next: NextFunction) => {
-  const app_name = readCredential(req, 'x-app-name', 'app_name');
-  const package_name_raw = readCredential(req, 'x-package-name', 'package_name');
-  const sha_key_raw = readCredential(req, 'x-sha-key', 'sha_key');
+const resolveRawBody = (req: Request): Buffer => {
+  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
+  if (typeof req.rawBody === 'string') return Buffer.from(req.rawBody, 'utf8');
+  if (req.body && Object.keys(req.body).length > 0) {
+    return Buffer.from(JSON.stringify(req.body), 'utf8');
+  }
+  return Buffer.alloc(0);
+};
 
-  if (!app_name || !package_name_raw || !sha_key_raw) {
+const verifySignatureForSecret = (
+  secret: string,
+  signature: string,
+  req: Request,
+  timestamp: string,
+): boolean =>
+  verifyPlatformRequestSignature(secret, signature, {
+    timestamp,
+    method: req.method,
+    path: resolveRequestPath(req),
+    raw_body: resolveRawBody(req),
+  });
+
+const platformAppAuth = async (req: Request, _res: Response, next: NextFunction) => {
+  const package_name_raw = readHeader(req, 'x-app-package') || readHeader(req, 'x-package-name');
+  const timestamp = readHeader(req, 'x-timestamp');
+  const signature = readHeader(req, 'x-signature');
+
+  if (!package_name_raw || !timestamp || !signature) {
     throw new AppError(
       httpStatus.UNAUTHORIZED,
-      'Platform app credentials are required (X-App-Name, X-Package-Name, X-Sha-Key)',
+      'Platform integration requires X-App-Package, X-Timestamp, and X-Signature headers',
     );
   }
 
-  const package_name = normalizePackageName(package_name_raw);
-  const sha_key = normalizeShaKey(sha_key_raw);
+  const timestamp_ms = parsePlatformTimestamp(timestamp);
+  if (timestamp_ms === null) {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'X-Timestamp must be a unix timestamp');
+  }
 
+  try {
+    assertPlatformTimestampFresh(timestamp_ms);
+  } catch {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'Platform request timestamp is expired or too far in the future');
+  }
+
+  const package_name = normalizePackageName(package_name_raw);
   const app = await prisma.platformApp.findUnique({
     where: { package_name },
     select: {
@@ -45,16 +79,24 @@ const platformAppAuth = async (req: Request, _res: Response, next: NextFunction)
       app_name: true,
       package_name: true,
       sha_key: true,
+      signing_secret: true,
+      signing_secret_previous: true,
       status: true,
     },
   });
 
-  if (!app || app.sha_key !== sha_key) {
-    throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid platform app credentials');
+  if (!app) {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'Unknown platform app package');
   }
 
-  if (app.app_name.trim().toLowerCase() !== app_name.trim().toLowerCase()) {
-    throw new AppError(httpStatus.UNAUTHORIZED, 'Platform app name does not match registered app');
+  const signature_valid =
+    verifySignatureForSecret(app.signing_secret, signature, req, timestamp)
+    || (app.signing_secret_previous
+      ? verifySignatureForSecret(app.signing_secret_previous, signature, req, timestamp)
+      : false);
+
+  if (!signature_valid) {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid platform request signature');
   }
 
   if (app.status !== PlatformAppStatus.active) {

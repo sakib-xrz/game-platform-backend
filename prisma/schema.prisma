@@ -1536,14 +1536,16 @@ model OpsAlert {
 }
 
 model PlatformApp {
-  id                  String            @id @default(cuid())
-  app_name            String
-  package_name        String            @unique
-  sha_key             String
-  status              PlatformAppStatus @default(active)
-  created_by_admin_id String?
-  created_at          DateTime          @default(now())
-  updated_at          DateTime          @updatedAt
+  id                       String            @id @default(cuid())
+  app_name                 String
+  package_name             String            @unique
+  sha_key                  String
+  signing_secret           String
+  signing_secret_previous  String?
+  status                   PlatformAppStatus @default(active)
+  created_by_admin_id      String?
+  created_at               DateTime          @default(now())
+  updated_at               DateTime          @updatedAt
 
   created_by AdminUser? @relation(fields: [created_by_admin_id], references: [id], onDelete: SetNull)
   platform_users PlatformUser[]

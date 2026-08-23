@@ -70,12 +70,27 @@ const deletePlatformApp = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const regenerateSigningSecret = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformAppService.regenerateSigningSecret(
+    requireAdmin(req),
+    String(req.params.app_id),
+    requestAuditContext(req),
+  );
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Platform app signing secret regenerated',
+    data,
+  });
+});
+
 const PlatformAppController = {
   listPlatformApps,
   getPlatformApp,
   createPlatformApp,
   updatePlatformApp,
   deletePlatformApp,
+  regenerateSigningSecret,
 };
 
 export default PlatformAppController;
