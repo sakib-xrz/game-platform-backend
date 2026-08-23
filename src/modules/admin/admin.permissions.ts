@@ -18,6 +18,8 @@ export const ADMIN_PERMISSIONS = [
   'asset.manage',
   'ops.read',
   'ops.alert.manage',
+  'platform.app.read',
+  'platform.app.manage',
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];

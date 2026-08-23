@@ -190,6 +190,13 @@ enum AdminStatus {
   @@map("admin_status")
 }
 
+enum PlatformAppStatus {
+  active
+  disabled
+
+  @@map("platform_app_status")
+}
+
 enum AdminApprovalStatus {
   pending
   approved
@@ -1366,6 +1373,7 @@ model AdminUser {
   idempotency_records AdminIdempotencyRecord[]
   acknowledged_alerts OpsAlert[] @relation("alert_acknowledger")
   resolved_alerts     OpsAlert[] @relation("alert_resolver")
+  platform_apps       PlatformApp[]
 
   @@index([role, status])
   @@map("admin_users")
@@ -1516,4 +1524,20 @@ model OpsAlert {
   @@index([status, severity, last_seen_at])
   @@index([code, source, last_seen_at])
   @@map("ops_alerts")
+}
+
+model PlatformApp {
+  id                  String            @id @default(cuid())
+  app_name            String
+  package_name        String            @unique
+  sha_key             String
+  status              PlatformAppStatus @default(active)
+  created_by_admin_id String?
+  created_at          DateTime          @default(now())
+  updated_at          DateTime          @updatedAt
+
+  created_by AdminUser? @relation(fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+
+  @@index([status, updated_at])
+  @@map("platform_apps")
 }

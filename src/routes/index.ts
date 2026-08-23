@@ -5,6 +5,7 @@ import { Lucky77Routes } from '@/modules/lucky-77/lucky-77.routes';
 import { GreedyClassicRoutes } from '@/modules/greedy-classic/greedy-classic.routes';
 import { WalletRoutes, WalletAdminRoutes } from '@/modules/wallet/wallet.routes';
 import { GameAdminRoutes } from '@/modules/game-admin/game-admin.routes';
+import { PlatformAppRoutes } from '@/modules/platform-app/platform-app.routes';
 import AdminRoutes from '@/modules/admin/admin.routes';
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
@@ -38,6 +39,7 @@ router.use('/games/greedy-classic', GreedyClassicRoutes);
 router.use('/wallets', WalletRoutes);
 router.use('/admin/wallets', WalletAdminRoutes);
 router.use('/admin/games', GameAdminRoutes);
+router.use('/admin/platform-apps', PlatformAppRoutes);
 router.use('/admin', AdminRoutes);
 
 export default router;
