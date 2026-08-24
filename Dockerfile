@@ -10,9 +10,10 @@ ENV NODE_ENV=development
 # Copy dependency files first for better Docker cache
 COPY package.json package-lock.json ./
 
-# Install exact dependencies from lockfile.
-# --include=dev keeps tsup/prisma even if Coolify injects NODE_ENV=production.
-RUN npm ci --include=dev --no-audit --no-fund
+# Install dependencies from package.json.
+# npm install is used here because the committed lockfile is currently out of sync.
+# --include=dev keeps tsup/prisma available during the build stage.
+RUN npm install --include=dev --no-audit --no-fund
 
 # Copy build/config files
 COPY tsconfig.json vitest.config.ts prisma.config.ts ./
@@ -49,7 +50,7 @@ RUN apt-get update \
 # Install production dependencies only
 COPY package.json package-lock.json ./
 
-RUN npm ci \
+RUN npm install \
     --omit=dev \
     --no-audit \
     --no-fund \

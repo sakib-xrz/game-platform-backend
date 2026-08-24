@@ -16,17 +16,22 @@ app.set('trust proxy', 1);
 app.use(requestContext);
 app.use(helmet());
 app.use(compression());
-app.use(cors({
-  origin: config.cors_origin.split(',').map((item) => item.trim()),
-  credentials: true,
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'Idempotency-Key',
-    'X-Request-Id',
-    'X-User-Id',
-  ],
-}));
+app.use(
+  cors({
+    origin: config.cors_origin.split(',').map((item) => item.trim()) || [
+      'http://localhost:3000',
+      'https://game.maxlived.net',
+    ],
+    credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Idempotency-Key',
+      'X-Request-Id',
+      'X-User-Id',
+    ],
+  }),
+);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(apiRateLimiter);
