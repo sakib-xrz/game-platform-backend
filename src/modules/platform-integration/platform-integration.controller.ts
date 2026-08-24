@@ -54,6 +54,20 @@ const getPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const launchPlatformUser = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformIntegrationService.launchPlatformUser(
+    {
+      app_name: String(req.query.app_name),
+      package_name: String(req.query.package_name),
+      sha_key: String(req.query.sha_key),
+    },
+    String(req.query.external_user_id),
+    req.query.path ? String(req.query.path) : '/',
+  );
+  // Redirect WebView into the game frontend with identity attached once.
+  res.redirect(302, data.launch_url);
+});
+
 const withdrawPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.withdrawPlatformUserCoins(
     req.body as WithdrawPlatformUserCoinsBody,
@@ -74,6 +88,7 @@ const PlatformIntegrationController = {
   creditPlatformUserCoins,
   withdrawPlatformUserCoins,
   getPlatformUserCoins,
+  launchPlatformUser,
 };
 
 export default PlatformIntegrationController;

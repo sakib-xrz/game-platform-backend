@@ -63,6 +63,14 @@ export const externalUserIdParamSchema = z.object({
   query: appCredentialsSchema,
 });
 
+export const launchPlatformUserSchema = z.object({
+  query: appCredentialsSchema.extend({
+    external_user_id: externalUserId,
+    path: z.string().trim().max(200).optional(),
+  }),
+});
+
 export type SyncPlatformUserBody = z.infer<typeof syncPlatformUserSchema>['body'];
 export type CreditPlatformUserCoinsBody = z.infer<typeof creditPlatformUserCoinsSchema>['body'];
 export type WithdrawPlatformUserCoinsBody = z.infer<typeof withdrawPlatformUserCoinsSchema>['body'];
+export type LaunchPlatformUserQuery = z.infer<typeof launchPlatformUserSchema>['query'];

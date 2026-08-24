@@ -5,6 +5,7 @@ import PlatformIntegrationController from './platform-integration.controller';
 import {
   creditPlatformUserCoinsSchema,
   externalUserIdParamSchema,
+  launchPlatformUserSchema,
   syncPlatformUserSchema,
   withdrawPlatformUserCoinsSchema,
 } from './platform-integration.validation';
@@ -27,6 +28,11 @@ PlatformIntegrationRoutes.post(
   '/users/coins/withdraw',
   validateRequest(withdrawPlatformUserCoinsSchema),
   PlatformIntegrationController.withdrawPlatformUserCoins,
+);
+PlatformIntegrationRoutes.get(
+  '/users/launch',
+  validateRequest(launchPlatformUserSchema),
+  PlatformIntegrationController.launchPlatformUser,
 );
 PlatformIntegrationRoutes.get(
   '/users/:external_user_id/coins',

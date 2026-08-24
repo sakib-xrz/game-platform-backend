@@ -6,6 +6,7 @@ import {
   Prisma,
 } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
+import config from '@/config';
 import prisma from '@/lib/prisma';
 import { normalizePackageName, normalizeShaKey } from '@/modules/platform-app/platform-app.validation';
 import { creditPlatformPurchase, debitPlatformWithdrawal, ensureWallet } from '@/modules/wallet/wallet.services';
@@ -59,6 +60,22 @@ const resolveActivePlatformApp = async (
   }
 
   return app;
+};
+
+/** Safe relative path for game frontend (home or a game). */
+const normalizeLaunchPath = (path?: string): string => {
+  const raw = (path || '/').trim() || '/';
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) {
+    throw new AppError(httpStatus.BAD_REQUEST, 'Invalid launch path');
+  }
+  return raw;
+};
+
+export const buildLaunchUrl = (user_id: string, path = '/'): string => {
+  const launch_path = normalizeLaunchPath(path);
+  const url = new URL(launch_path, `${config.game_frontend_url}/`);
+  url.searchParams.set('user', user_id);
+  return url.toString();
 };
 
 const platformUserSelect = {
@@ -118,6 +135,8 @@ const serializeUserResponse = (
   balance: balance.toString(),
   currency: DEFAULT_CURRENCY_CODE,
   created,
+  /** Open this once in the WebView — identity is kept for all games. */
+  launch_url: buildLaunchUrl(user.id, '/'),
 });
 
 const findPlatformUserOrThrow = async (
@@ -237,6 +256,24 @@ const getPlatformUserCoins = async (
     external_user_id: user.external_user_id,
     balance: balance.toString(),
     currency: DEFAULT_CURRENCY_CODE,
+    launch_url: buildLaunchUrl(user.id, '/'),
+  };
+};
+
+const launchPlatformUser = async (
+  credentials: AppCredentials,
+  external_user_id: string,
+  path?: string,
+) => {
+  const platform_app = await resolveActivePlatformApp(credentials);
+  const user = await findPlatformUserOrThrow(platform_app, external_user_id.trim());
+  if (user.status !== PlatformUserStatus.active) {
+    throw new AppError(httpStatus.FORBIDDEN, 'Platform user is disabled');
+  }
+  return {
+    user_id: user.id,
+    external_user_id: user.external_user_id,
+    launch_url: buildLaunchUrl(user.id, path),
   };
 };
 
@@ -447,6 +484,8 @@ const PlatformIntegrationService = {
   getPlatformUserCoins,
   creditPlatformUserCoins,
   withdrawPlatformUserCoins,
+  launchPlatformUser,
+  buildLaunchUrl,
 };
 
 export default PlatformIntegrationService;
