@@ -17,6 +17,12 @@ const config = {
   database_url: process.env.DATABASE_URL || '',
   redis_url: process.env.REDIS_URL || 'redis://localhost:6379',
   cors_origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  /** Public game WebView origin, e.g. https://game.maxlived.net */
+  game_frontend_url: (
+    process.env.GAME_FRONTEND_URL ||
+    (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',')[0] ||
+    'http://localhost:3000'
+  ).replace(/\/$/, ''),
   admin_api_key: process.env.ADMIN_API_KEY || '',
   allow_dev_identity_header:
     (process.env.ALLOW_DEV_IDENTITY_HEADER || 'false').toLowerCase() === 'true',
