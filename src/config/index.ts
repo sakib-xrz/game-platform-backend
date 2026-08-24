@@ -10,6 +10,27 @@ const parsePositiveInt = (
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const isLocalOrigin = (origin: string): boolean =>
+  /localhost|127\.0\.0\.1/i.test(origin);
+
+/** Prefer GAME_FRONTEND_URL; else first non-local CORS origin; else env-aware default. */
+const resolveGameFrontendUrl = (): string => {
+  const explicit = process.env.GAME_FRONTEND_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+
+  const cors_origins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const public_origin = cors_origins.find((origin) => !isLocalOrigin(origin));
+  if (public_origin) return public_origin.replace(/\/$/, '');
+
+  const node_env = process.env.NODE_ENV || 'development';
+  return node_env === 'production'
+    ? 'https://game.maxlived.net'
+    : 'http://localhost:3000';
+};
+
 const config = {
   port: Number(process.env.PORT) || 8000,
   node_env: process.env.NODE_ENV || 'development',
@@ -19,14 +40,8 @@ const config = {
   // Comma-separated. Set CORS_ORIGIN in prod to include https://game.maxlived.net
   cors_origin:
     process.env.CORS_ORIGIN || 'http://localhost:3000,https://game.maxlived.net',
-  /** Public game WebView origin, e.g. https://game.maxlived.net */
-  game_frontend_url: (
-    process.env.GAME_FRONTEND_URL ||
-    (process.env.CORS_ORIGIN || 'https://game.maxlived.net')
-      .split(',')[0]
-      ?.trim() ||
-    'https://game.maxlived.net'
-  ).replace(/\/$/, ''),
+  /** Public game WebView origin used in sync `launch_url`. */
+  game_frontend_url: resolveGameFrontendUrl(),
   admin_api_key: process.env.ADMIN_API_KEY || '',
   allow_dev_identity_header:
     (process.env.ALLOW_DEV_IDENTITY_HEADER || 'false').toLowerCase() === 'true',
