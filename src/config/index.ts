@@ -16,12 +16,16 @@ const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   database_url: process.env.DATABASE_URL || '',
   redis_url: process.env.REDIS_URL || 'redis://localhost:6379',
-  cors_origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  // Comma-separated. Set CORS_ORIGIN in prod to include https://game.maxlived.net
+  cors_origin:
+    process.env.CORS_ORIGIN || 'http://localhost:3000,https://game.maxlived.net',
   /** Public game WebView origin, e.g. https://game.maxlived.net */
   game_frontend_url: (
     process.env.GAME_FRONTEND_URL ||
-    (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',')[0] ||
-    'http://localhost:3000'
+    (process.env.CORS_ORIGIN || 'https://game.maxlived.net')
+      .split(',')[0]
+      ?.trim() ||
+    'https://game.maxlived.net'
   ).replace(/\/$/, ''),
   admin_api_key: process.env.ADMIN_API_KEY || '',
   allow_dev_identity_header:
