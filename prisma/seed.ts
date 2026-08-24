@@ -4,6 +4,7 @@ import {
   AdminRole,
   AdminStatus,
   ConfigVersionStatus,
+  GameBotStatus,
   GameStatus,
   GreedyRuntimeStatus,
   GreedyClassicRuntimeStatus,
@@ -648,6 +649,40 @@ const main = async (): Promise<void> => {
         },
       });
     }
+  }
+
+  const bot_names = [
+    'Aarav', 'Sara', 'Rahim', 'Nusrat', 'Karim', 'Maya', 'Imran', 'Laila', 'Farhan', 'Anika',
+    'Tanvir', 'Priya', 'Shuvo', 'Nadia', 'Arif', 'Meera', 'Rashed', 'Tania', 'Kabir', 'Elina',
+    'Samir', 'Diya', 'Hassan', 'Zara', 'Omar', 'Isha', 'Naveen', 'Riya', 'Faiz', 'Amira',
+  ];
+
+  await prisma.gameBotPolicy.upsert({
+    where: { code: 'default' },
+    update: {},
+    create: {
+      code: 'default',
+      enabled: true,
+      target_human_win_rate: 0.15,
+      min_bots_per_round: 2,
+      max_bots_per_round: 8,
+      min_human_bets_before_bias: 1,
+    },
+  });
+
+  for (const [index, display_name] of bot_names.entries()) {
+    const id = `gbot${String(index + 1).padStart(2, '0')}${display_name.toLowerCase().slice(0, 4)}`;
+    await prisma.gameBot.upsert({
+      where: { id },
+      update: { display_name, status: GameBotStatus.active },
+      create: {
+        id,
+        display_name,
+        avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(display_name)}`,
+        persona_seed: index + 1,
+        status: GameBotStatus.active,
+      },
+    });
   }
 
   console.log({

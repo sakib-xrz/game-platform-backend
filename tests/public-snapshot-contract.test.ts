@@ -189,7 +189,7 @@ describe('public snapshot query contract', () => {
         round_id: 'greedy-round',
         option_id: 'greedy-frozen-config-opt',
         user_id: 'player-2',
-        display_name: null,
+        display_name: 'Player ayer-2',
         avatar_url: null,
         total_amount: '1500',
         bet_count: 2,
@@ -254,7 +254,7 @@ describe('public snapshot query contract', () => {
       {
         rank: 1,
         user_id: 'nasim',
-        display_name: null,
+        display_name: 'Player nasim',
         avatar_url: null,
         winning_stake: '3000',
         bet_count: 2,
@@ -387,7 +387,7 @@ describe('public snapshot query contract', () => {
     });
     expect(snapshot.player).toEqual({
       user_id: 'player',
-      display_name: null,
+      display_name: 'Player player',
       avatar_url: null,
     });
     expect(snapshot.round?.bettors).toEqual([
@@ -395,7 +395,7 @@ describe('public snapshot query contract', () => {
         round_id: 'teen-round',
         option_id: 'teen-frozen-config-opt',
         user_id: 'player-2',
-        display_name: null,
+        display_name: 'Player ayer-2',
         avatar_url: null,
         total_amount: '700',
         bet_count: 3,
@@ -406,7 +406,7 @@ describe('public snapshot query contract', () => {
         round_id: 'teen-round',
         option_id: 'teen-frozen-config-opt',
         user_id: 'player-3',
-        display_name: null,
+        display_name: 'Player ayer-3',
         avatar_url: null,
         total_amount: '500',
         bet_count: 1,

@@ -138,7 +138,11 @@ describe('teen-patti public projections', () => {
         player_count: 3,
         round_bet_count: 7,
       },
-      'user-1',
+      {
+        user_id: 'user-1',
+        display_name: null,
+        avatar_url: null,
+      },
     );
 
     expect(event).toEqual({

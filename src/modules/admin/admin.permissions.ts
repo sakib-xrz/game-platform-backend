@@ -18,6 +18,9 @@ export const ADMIN_PERMISSIONS = [
   'asset.manage',
   'ops.read',
   'ops.alert.manage',
+  'platform.app.read',
+  'platform.app.manage',
+  'platform.user.read',
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
@@ -46,12 +49,14 @@ const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]> = {
     'wallet.read',
     'wallet.adjust.create',
     'wallet.adjust.approve',
+    'platform.user.read',
     'ops.read',
   ],
   [AdminRole.support]: [
     'game.read',
     'round.read',
     'wallet.read',
+    'platform.user.read',
   ],
   [AdminRole.auditor]: [
     'dashboard.read',
@@ -59,6 +64,7 @@ const ROLE_PERMISSIONS: Record<AdminRole, readonly AdminPermission[]> = {
     'game.read',
     'round.read',
     'wallet.read',
+    'platform.user.read',
     'audit.read',
     'ops.read',
   ],

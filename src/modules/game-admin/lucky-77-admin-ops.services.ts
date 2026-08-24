@@ -16,6 +16,8 @@ import { LUCKY_77_GAME_CODE, LUCKY_77_SOCKET_ROOM } from '@/modules/lucky-77/luc
 import { sha256 } from '@/utils/hash';
 import { deliverOpsWebhook } from '@/modules/admin/admin-webhook';
 import { logger } from '@/utils/logger';
+import { humanOnlyBetUserFilter } from '@/modules/game-bot/admin-bot-filter';
+import { getActiveBotIds, isBotUserId } from '@/modules/game-bot/bot-identity';
 import { getPagination } from '@/utils/pagination';
 import type { CreateLucky77ConfigBody } from './game-admin.validation';
 import { resolveLucky77OptionAssets } from './lucky-77-admin.services';
@@ -215,7 +217,12 @@ const listRoundBets = async (round_id: string, query: OpsRoundBetsQuery) => {
   const round = await prisma.lucky77Round.findFirst({ where: { id: round_id, game_id: game.id }, select: { id: true } });
   if (!round) throw new AppError(httpStatus.NOT_FOUND, 'Round not found');
   const pagination = getPagination(query.page, query.limit);
-  const where: Prisma.Lucky77BetWhereInput = { round_id, ...(query.user_id ? { user_id: query.user_id } : {}), ...(query.option_id ? { option_version_id: query.option_id } : {}) };
+  const user_filter = await humanOnlyBetUserFilter(query.user_id);
+  const where: Prisma.Lucky77BetWhereInput = {
+    round_id,
+    ...(query.option_id ? { option_version_id: query.option_id } : {}),
+    ...(user_filter ? { user_id: user_filter } : {}),
+  };
   const [items, total] = await prisma.$transaction([
     prisma.lucky77Bet.findMany({ where, orderBy: { accepted_at: 'desc' }, skip: pagination.skip, take: pagination.limit, select: { id: true, user_id: true, amount: true, accepted_at: true, client_request_id: true, payout_numerator: true, payout_denominator: true, option: { select: { id: true, code: true, name: true, image_url: true } }, settlement: { select: { outcome: true, payout_amount: true, settled_at: true } } } }),
     prisma.lucky77Bet.count({ where }),
@@ -224,6 +231,9 @@ const listRoundBets = async (round_id: string, query: OpsRoundBetsQuery) => {
 };
 
 const getUserSummary = async (user_id: string) => {
+  if (await isBotUserId(user_id)) {
+    throw new AppError(httpStatus.NOT_FOUND, 'Player wallet not found for user ID');
+  }
   const [wallet, betsCount, betTotal, payoutTotal, refundTotal] = await Promise.all([
     prisma.wallet.findFirst({ where: { user_id }, include: { currency: true } }),
     prisma.lucky77Bet.count({ where: { user_id } }),
@@ -256,6 +266,8 @@ const getMetrics = async (query: OpsMetricsQuery) => {
     prisma.$queryRaw<Array<{ bucket: string; rounds: string; cancelled: string }>>(Prisma.sql`SELECT to_char((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Dhaka', 'YYYY-MM-DD') AS bucket, COUNT(*)::text AS rounds, COUNT(*) FILTER (WHERE status = 'cancelled')::text AS cancelled FROM lucky_77_rounds WHERE game_id = ${game.id} AND created_at >= ${from} AND created_at <= ${to} GROUP BY bucket ORDER BY bucket`),
     prisma.$queryRaw<Array<{ average_seconds: number | null; settled_rounds: string }>>(Prisma.sql`SELECT AVG(EXTRACT(EPOCH FROM (settled_at - result_reveal_at)))::float8 AS average_seconds, COUNT(*)::text AS settled_rounds FROM lucky_77_rounds WHERE game_id = ${game.id} AND settled_at IS NOT NULL AND result_reveal_at IS NOT NULL AND settled_at >= ${from} AND settled_at <= ${to}`),
   ]);
+  const bot_ids = new Set(await getActiveBotIds());
+  const human_unique_bettors = uniqueBettors.filter((row) => !bot_ids.has(row.user_id));
   const accepted = bets._sum.amount ?? 0n;
   const refunded = refunds._sum.total_bet_amount ?? 0n;
   const payout = payouts._sum.total_payout ?? 0n;
@@ -274,7 +286,7 @@ const getMetrics = async (query: OpsMetricsQuery) => {
   return {
     timezone: 'Asia/Dhaka', window: { from, to },
     rounds: { by_status: rounds, total: rounds.reduce((sum, row) => sum + row._count._all, 0), cancelled: rounds.find((row) => row.status === Lucky77RoundStatus.cancelled)?._count._all ?? 0, cancellation_rate: rounds.length ? ((rounds.find((row) => row.status === Lucky77RoundStatus.cancelled)?._count._all ?? 0) / rounds.reduce((sum, row) => sum + row._count._all, 0)) * 100 : 0 },
-    bets: { count: bets._count._all, unique_bettors: uniqueBettors.length, accepted_stake: accepted.toString(), refunded_stake: refunded.toString(), net_stake: net_stake.toString() },
+    bets: { count: bets._count._all, unique_bettors: human_unique_bettors.length, accepted_stake: accepted.toString(), refunded_stake: refunded.toString(), net_stake: net_stake.toString() },
     payouts: { users: payouts._count._all, total_amount: payout.toString(), winning_stake: (payouts._sum.total_winning_stake ?? 0n).toString() },
     gross_result: gross_result.toString(), ledger, settlement: { average_latency_seconds: settlementLatency[0]?.average_seconds ?? null, settled_rounds: Number(settlementLatency[0]?.settled_rounds ?? 0) },
     time_series: [...timeSeries.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, item]) => ({ date, accepted_stake: item.accepted_stake.toString(), refunded_stake: item.refunded_stake.toString(), net_stake: (item.accepted_stake - item.refunded_stake).toString(), payout: item.payout.toString(), gross_result: (item.accepted_stake - item.refunded_stake - item.payout).toString(), rounds: item.rounds, cancelled_rounds: item.cancelled_rounds, bets: item.bets, unique_bettors: item.unique_bettors })),

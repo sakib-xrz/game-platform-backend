@@ -190,6 +190,20 @@ enum AdminStatus {
   @@map("admin_status")
 }
 
+enum PlatformAppStatus {
+  active
+  disabled
+
+  @@map("platform_app_status")
+}
+
+enum PlatformUserStatus {
+  active
+  disabled
+
+  @@map("platform_user_status")
+}
+
 enum AdminApprovalStatus {
   pending
   approved
@@ -306,6 +320,8 @@ model WalletLedger {
   greedy_classic_debit_bet GreedyClassicBet?        @relation("greedy_classic_bet_debit_ledger")
   greedy_classic_payout    GreedyClassicUserPayout? @relation("greedy_classic_payout_ledger")
   greedy_classic_refund    GreedyClassicUserRefund? @relation("greedy_classic_refund_ledger")
+  platform_coin_deposits   PlatformCoinDeposit[]
+  platform_coin_withdrawals PlatformCoinWithdrawal[]
 
   @@index([wallet_id, created_at])
   @@index([user_id, created_at])
@@ -495,21 +511,21 @@ model GreedyBet {
   game_id                 String
   round_id                String
   user_id                 String
-  wallet_id               String
+  wallet_id               String?
   option_version_id       String
   amount                  BigInt
   payout_numerator        BigInt
   payout_denominator      BigInt
   client_request_id       String
-  wallet_debit_ledger_id  String   @unique
+  wallet_debit_ledger_id  String?  @unique
   accepted_at             DateTime @default(now())
   created_at              DateTime @default(now())
 
   game          Game                @relation(fields: [game_id], references: [id], onDelete: Restrict)
   round         GreedyRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
-  wallet        Wallet              @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet        Wallet?             @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
   option        GreedyOptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
-  debit_ledger  WalletLedger        @relation("bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  debit_ledger  WalletLedger?       @relation("bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
   settlement    GreedyBetSettlement?
 
   @@unique([user_id, client_request_id])
@@ -725,19 +741,19 @@ model TeenPattiBet {
   game_id                String
   round_id               String
   user_id                String
-  wallet_id              String
+  wallet_id              String?
   option_version_id      String
   amount                 BigInt
   client_request_id      String
-  wallet_debit_ledger_id String   @unique
+  wallet_debit_ledger_id String?  @unique
   accepted_at            DateTime @default(now())
   created_at             DateTime @default(now())
 
   game         Game                   @relation(fields: [game_id], references: [id], onDelete: Restrict)
   round        TeenPattiRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
-  wallet       Wallet                 @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet       Wallet?                @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
   option       TeenPattiOptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
-  debit_ledger WalletLedger           @relation("teen_patti_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  debit_ledger WalletLedger?          @relation("teen_patti_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
   settlement   TeenPattiBetSettlement?
 
   @@unique([user_id, client_request_id])
@@ -955,21 +971,21 @@ model Lucky77Bet {
   game_id                 String
   round_id                String
   user_id                 String
-  wallet_id               String
+  wallet_id               String?
   option_version_id       String
   amount                  BigInt
   payout_numerator        BigInt
   payout_denominator      BigInt
   client_request_id       String
-  wallet_debit_ledger_id  String   @unique
+  wallet_debit_ledger_id  String?  @unique
   accepted_at             DateTime @default(now())
   created_at              DateTime @default(now())
 
   game          Game                 @relation(fields: [game_id], references: [id], onDelete: Restrict)
   round         Lucky77Round         @relation(fields: [round_id], references: [id], onDelete: Restrict)
-  wallet        Wallet               @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet        Wallet?              @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
   option        Lucky77OptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
-  debit_ledger  WalletLedger         @relation("lucky_77_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  debit_ledger  WalletLedger?        @relation("lucky_77_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
   settlement    Lucky77BetSettlement?
 
   @@unique([user_id, client_request_id])
@@ -1185,21 +1201,21 @@ model GreedyClassicBet {
   game_id                 String
   round_id                String
   user_id                 String
-  wallet_id               String
+  wallet_id               String?
   option_version_id       String
   amount                  BigInt
   payout_numerator        BigInt
   payout_denominator      BigInt
   client_request_id       String
-  wallet_debit_ledger_id  String   @unique
+  wallet_debit_ledger_id  String?  @unique
   accepted_at             DateTime @default(now())
   created_at              DateTime @default(now())
 
   game          Game                       @relation(fields: [game_id], references: [id], onDelete: Restrict)
   round         GreedyClassicRound         @relation(fields: [round_id], references: [id], onDelete: Restrict)
-  wallet        Wallet                     @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
+  wallet        Wallet?                    @relation(fields: [wallet_id], references: [id], onDelete: Restrict)
   option        GreedyClassicOptionVersion @relation(fields: [option_version_id], references: [id], onDelete: Restrict)
-  debit_ledger  WalletLedger               @relation("greedy_classic_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
+  debit_ledger  WalletLedger?              @relation("greedy_classic_bet_debit_ledger", fields: [wallet_debit_ledger_id], references: [id], onDelete: Restrict)
   settlement    GreedyClassicBetSettlement?
 
   @@unique([user_id, client_request_id])
@@ -1366,6 +1382,7 @@ model AdminUser {
   idempotency_records AdminIdempotencyRecord[]
   acknowledged_alerts OpsAlert[] @relation("alert_acknowledger")
   resolved_alerts     OpsAlert[] @relation("alert_resolver")
+  platform_apps       PlatformApp[]
 
   @@index([role, status])
   @@map("admin_users")
@@ -1516,4 +1533,119 @@ model OpsAlert {
   @@index([status, severity, last_seen_at])
   @@index([code, source, last_seen_at])
   @@map("ops_alerts")
+}
+
+model PlatformApp {
+  id                       String            @id @default(cuid())
+  app_name                 String
+  package_name             String            @unique
+  sha_key                  String
+  signing_secret           String
+  signing_secret_previous  String?
+  status                   PlatformAppStatus @default(active)
+  created_by_admin_id      String?
+  created_at               DateTime          @default(now())
+  updated_at               DateTime          @updatedAt
+
+  created_by AdminUser? @relation(fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+  platform_users PlatformUser[]
+  platform_coin_deposits PlatformCoinDeposit[]
+  platform_coin_withdrawals PlatformCoinWithdrawal[]
+
+  @@index([status, updated_at])
+  @@map("platform_apps")
+}
+
+model PlatformUser {
+  id               String             @id @default(cuid())
+  platform_app_id  String
+  external_user_id String
+  email            String
+  display_name     String
+  photo_url        String?
+  status           PlatformUserStatus @default(active)
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+
+  platform_app PlatformApp           @relation(fields: [platform_app_id], references: [id], onDelete: Restrict)
+  coin_deposits PlatformCoinDeposit[]
+  coin_withdrawals PlatformCoinWithdrawal[]
+
+  @@unique([platform_app_id, external_user_id])
+  @@index([platform_app_id, email])
+  @@map("platform_users")
+}
+
+model PlatformCoinDeposit {
+  id                 String   @id @default(cuid())
+  platform_app_id    String
+  platform_user_id   String
+  external_user_id   String
+  client_request_id  String
+  received_amount    BigInt
+  converted_amount   BigInt
+  wallet_ledger_id   String   @unique
+  created_at         DateTime @default(now())
+
+  platform_app  PlatformApp  @relation(fields: [platform_app_id], references: [id], onDelete: Restrict)
+  platform_user PlatformUser @relation(fields: [platform_user_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation(fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([platform_app_id, client_request_id])
+  @@index([platform_user_id, created_at])
+  @@map("platform_coin_deposits")
+}
+
+model PlatformCoinWithdrawal {
+  id                 String   @id @default(cuid())
+  platform_app_id    String
+  platform_user_id   String
+  external_user_id   String
+  client_request_id  String
+  requested_amount   BigInt
+  transferred_amount BigInt
+  wallet_ledger_id   String   @unique
+  created_at         DateTime @default(now())
+
+  platform_app  PlatformApp  @relation(fields: [platform_app_id], references: [id], onDelete: Restrict)
+  platform_user PlatformUser @relation(fields: [platform_user_id], references: [id], onDelete: Restrict)
+  wallet_ledger WalletLedger @relation(fields: [wallet_ledger_id], references: [id], onDelete: Restrict)
+
+  @@unique([platform_app_id, client_request_id])
+  @@index([platform_user_id, created_at])
+  @@map("platform_coin_withdrawals")
+}
+
+enum GameBotStatus {
+  active
+  disabled
+
+  @@map("game_bot_status")
+}
+
+model GameBot {
+  id            String        @id @default(cuid())
+  display_name  String
+  avatar_url    String?
+  persona_seed  Int           @default(0)
+  status        GameBotStatus @default(active)
+  created_at    DateTime      @default(now())
+  updated_at    DateTime      @updatedAt
+
+  @@index([status, updated_at])
+  @@map("game_bots")
+}
+
+model GameBotPolicy {
+  id                         String   @id @default(cuid())
+  code                       String   @unique @default("default")
+  enabled                    Boolean  @default(true)
+  target_human_win_rate      Float    @default(0.15)
+  min_bots_per_round         Int      @default(2)
+  max_bots_per_round         Int      @default(8)
+  min_human_bets_before_bias Int      @default(1)
+  created_at                 DateTime @default(now())
+  updated_at                 DateTime @updatedAt
+
+  @@map("game_bot_policies")
 }

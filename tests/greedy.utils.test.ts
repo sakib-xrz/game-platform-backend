@@ -51,7 +51,11 @@ describe('Greedy utility rules', () => {
         first_bet_at: new Date(500),
         last_bet_at: new Date(1_000),
       },
-      'nasim',
+      {
+        user_id: 'nasim',
+        display_name: null,
+        avatar_url: null,
+      },
     );
 
     expect(payload).toEqual({
@@ -89,7 +93,7 @@ describe('Greedy utility rules', () => {
       {
         rank: 1,
         user_id: 'nasim',
-        display_name: null,
+        display_name: 'Player nasim',
         avatar_url: null,
         winning_stake: '2',
         bet_count: 2,
@@ -99,7 +103,7 @@ describe('Greedy utility rules', () => {
       {
         rank: 2,
         user_id: 'other',
-        display_name: null,
+        display_name: 'Player other',
         avatar_url: null,
         winning_stake: '1',
         bet_count: 1,

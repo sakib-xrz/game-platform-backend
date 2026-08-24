@@ -22,6 +22,7 @@ import {
   recoverGreedyClassicRuntime,
   runGreedyClassicTick,
 } from '@/workers/greedy-classic-round.worker';
+import { runBotOrchestratorTick } from '@/modules/game-bot/bot-orchestrator';
 import { logger } from '@/utils/logger';
 
 const GREEDY_LEASE_KEY = 'game-worker:greedy';
@@ -122,12 +123,13 @@ const main = async (): Promise<void> => {
       // The games have independent runtimes and tables. Advancing them in
       // parallel prevents a slow transition or settlement in one game from
       // stretching every phase deadline in the other game.
-      const [greedy_tick, teen_patti_tick, lucky_77_tick, greedy_classic_tick] =
+      const [greedy_tick, teen_patti_tick, lucky_77_tick, greedy_classic_tick, bot_tick] =
         await Promise.allSettled([
           greedy_leader ? runGreedyTick() : Promise.resolve(),
           teen_patti_leader ? runTeenPattiTick() : Promise.resolve(),
           lucky_77_leader ? runLucky77Tick() : Promise.resolve(),
           greedy_classic_leader ? runGreedyClassicTick() : Promise.resolve(),
+          runBotOrchestratorTick(),
         ]);
 
       // Wait for all ticks to finish before the next loop so a fast failure
@@ -164,6 +166,7 @@ const main = async (): Promise<void> => {
       noteTickFailure('GREEDY_CLASSIC', greedy_classic_tick, () => {
         greedy_classic_leader = false;
       });
+      noteTickFailure('GAME_BOT', bot_tick, () => undefined);
     } catch (error) {
       logger.error('game_worker_loop_failed', { error });
       greedy_leader = false;
