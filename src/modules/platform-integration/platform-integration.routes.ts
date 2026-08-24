@@ -1,5 +1,4 @@
 import express from 'express';
-import platformAppAuth from '@/middlewares/platform-app-auth';
 import validateRequest from '@/middlewares/validate-request';
 import { integrationRateLimiter } from '@/middlewares/rate-limiter';
 import PlatformIntegrationController from './platform-integration.controller';
@@ -12,7 +11,7 @@ import {
 
 export const PlatformIntegrationRoutes = express.Router();
 
-PlatformIntegrationRoutes.use(integrationRateLimiter, platformAppAuth);
+PlatformIntegrationRoutes.use(integrationRateLimiter);
 
 PlatformIntegrationRoutes.post(
   '/users/sync',

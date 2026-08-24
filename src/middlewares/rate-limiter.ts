@@ -81,7 +81,11 @@ export const integrationRateLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => {
-    const package_name = req.header('x-package-name')?.trim().toLowerCase() || 'unknown';
+    const from_body =
+      typeof req.body?.package_name === 'string' ? req.body.package_name.trim().toLowerCase() : '';
+    const from_query =
+      typeof req.query?.package_name === 'string' ? req.query.package_name.trim().toLowerCase() : '';
+    const package_name = from_body || from_query || 'unknown';
     return `${ipKeyGenerator(req.ip || 'unknown')}:${package_name}`;
   },
   message: {

@@ -1,25 +1,17 @@
 import { Request, Response } from 'express';
 import httpStatus from 'http-status';
-import AppError from '@/errors/app-error';
 import catchAsync from '@/utils/catch-async';
 import sendResponse from '@/utils/send-response';
 import PlatformIntegrationService from './platform-integration.services';
 import type {
+  AppCredentials,
   CreditPlatformUserCoinsBody,
   SyncPlatformUserBody,
   WithdrawPlatformUserCoinsBody,
 } from './platform-integration.validation';
 
-const requirePlatformApp = (req: Request) => {
-  if (!req.platform_app) {
-    throw new AppError(httpStatus.UNAUTHORIZED, 'Platform app authentication is required');
-  }
-  return req.platform_app;
-};
-
 const syncPlatformUser = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.syncPlatformUser(
-    requirePlatformApp(req),
     req.body as SyncPlatformUserBody,
     req.request_id,
   );
@@ -33,7 +25,6 @@ const syncPlatformUser = catchAsync(async (req: Request, res: Response) => {
 
 const creditPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.creditPlatformUserCoins(
-    requirePlatformApp(req),
     req.body as CreditPlatformUserCoinsBody,
     req.request_id,
   );
@@ -46,8 +37,13 @@ const creditPlatformUserCoins = catchAsync(async (req: Request, res: Response) =
 });
 
 const getPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
+  const credentials: AppCredentials = {
+    app_name: String(req.query.app_name),
+    package_name: String(req.query.package_name),
+    sha_key: String(req.query.sha_key),
+  };
   const data = await PlatformIntegrationService.getPlatformUserCoins(
-    requirePlatformApp(req),
+    credentials,
     String(req.params.external_user_id),
   );
   sendResponse(res, {
@@ -60,7 +56,6 @@ const getPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
 
 const withdrawPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.withdrawPlatformUserCoins(
-    requirePlatformApp(req),
     req.body as WithdrawPlatformUserCoinsBody,
     req.request_id,
   );

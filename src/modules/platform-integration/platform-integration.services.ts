@@ -1,20 +1,65 @@
 import httpStatus from 'http-status';
 import {
   AuditActorType,
+  PlatformAppStatus,
   PlatformUserStatus,
   Prisma,
 } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
-import type { AuthenticatedPlatformApp } from '@/middlewares/platform-app-auth';
+import { normalizePackageName, normalizeShaKey } from '@/modules/platform-app/platform-app.validation';
 import { creditPlatformPurchase, debitPlatformWithdrawal, ensureWallet } from '@/modules/wallet/wallet.services';
 import type {
+  AppCredentials,
   CreditPlatformUserCoinsBody,
   SyncPlatformUserBody,
   WithdrawPlatformUserCoinsBody,
 } from './platform-integration.validation';
 
 const DEFAULT_CURRENCY_CODE = 'COIN';
+
+export type PlatformAppContext = {
+  id: string;
+  app_name: string;
+  package_name: string;
+  sha_key: string;
+  status: PlatformAppStatus;
+};
+
+const resolveActivePlatformApp = async (
+  credentials: AppCredentials,
+): Promise<PlatformAppContext> => {
+  const package_name = normalizePackageName(credentials.package_name);
+  const sha_key = normalizeShaKey(credentials.sha_key);
+  const app_name = credentials.app_name.trim();
+
+  const app = await prisma.platformApp.findUnique({
+    where: { package_name },
+    select: {
+      id: true,
+      app_name: true,
+      package_name: true,
+      sha_key: true,
+      status: true,
+    },
+  });
+
+  if (!app) {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid app credentials');
+  }
+
+  const name_matches = app.app_name.trim().toLowerCase() === app_name.toLowerCase();
+  const sha_matches = normalizeShaKey(app.sha_key) === sha_key;
+  if (!name_matches || !sha_matches) {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid app credentials');
+  }
+
+  if (app.status !== PlatformAppStatus.active) {
+    throw new AppError(httpStatus.FORBIDDEN, 'Platform app is disabled');
+  }
+
+  return app;
+};
 
 const platformUserSelect = {
   id: true,
@@ -75,7 +120,7 @@ const serializeUserResponse = (
 });
 
 const findPlatformUserOrThrow = async (
-  platform_app: AuthenticatedPlatformApp,
+  platform_app: PlatformAppContext,
   external_user_id: string,
 ) => {
   const user = await prisma.platformUser.findUnique({
@@ -94,10 +139,10 @@ const findPlatformUserOrThrow = async (
 };
 
 const syncPlatformUser = async (
-  platform_app: AuthenticatedPlatformApp,
   body: SyncPlatformUserBody,
   request_id?: string,
 ) => {
+  const platform_app = await resolveActivePlatformApp(body);
   const external_user_id = body.external_user_id.trim();
   const email = body.email.trim().toLowerCase();
   const display_name = body.name.trim();
@@ -180,9 +225,10 @@ const syncPlatformUser = async (
 };
 
 const getPlatformUserCoins = async (
-  platform_app: AuthenticatedPlatformApp,
+  credentials: AppCredentials,
   external_user_id: string,
 ) => {
+  const platform_app = await resolveActivePlatformApp(credentials);
   const user = await findPlatformUserOrThrow(platform_app, external_user_id.trim());
   const balance = await getWalletBalance(user.id);
   return {
@@ -193,10 +239,10 @@ const getPlatformUserCoins = async (
 };
 
 const creditPlatformUserCoins = async (
-  platform_app: AuthenticatedPlatformApp,
   body: CreditPlatformUserCoinsBody,
   request_id?: string,
 ) => {
+  const platform_app = await resolveActivePlatformApp(body);
   const external_user_id = body.external_user_id.trim();
   const amount = BigInt(body.amount);
   const client_request_id = body.client_request_id.trim();
@@ -289,10 +335,10 @@ const creditPlatformUserCoins = async (
 };
 
 const withdrawPlatformUserCoins = async (
-  platform_app: AuthenticatedPlatformApp,
   body: WithdrawPlatformUserCoinsBody,
   request_id?: string,
 ) => {
+  const platform_app = await resolveActivePlatformApp(body);
   const external_user_id = body.external_user_id.trim();
   const amount = BigInt(body.amount);
   const client_request_id = body.client_request_id.trim();

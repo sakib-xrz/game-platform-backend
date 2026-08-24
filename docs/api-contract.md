@@ -45,7 +45,7 @@ Amounts and balances are always **integer strings** (no decimals), e.g. `"500"`.
 | GET | `/integrations/users/:external_user_id/coins` | Get balance |
 | POST | `/integrations/users/coins/withdraw` | Withdraw coins game → app |
 
-All integration requests require HMAC headers (`X-App-Package`, `X-Timestamp`, `X-Signature`). See the linked doc for bodies, responses, and signing examples.
+All integration endpoints are **public**. Every request must include `app_name`, `package_name`, and `sha_key`; all three must match an active Platform App. See the linked doc for bodies and responses.
 
 ---
 
@@ -76,9 +76,9 @@ Requires admin bearer session. Mutations need `Idempotency-Key`.
 | Field | Purpose |
 |-------|---------|
 | `app_name` | Display name |
-| `package_name` | Android package ID; used in `X-App-Package` |
-| `sha_key` | Android signing certificate fingerprint (attestation only, not API auth) |
-| `signing_secret` | Auto-generated on create; used for HMAC (shown once) |
+| `package_name` | Android package ID; sent as `package_name` on public integration calls |
+| `sha_key` | Android signing certificate fingerprint (attestation metadata) |
+| `signing_secret` | Auto-generated on create (legacy field; integration APIs no longer require HMAC) |
 
 ---
 

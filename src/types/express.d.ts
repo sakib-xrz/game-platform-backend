@@ -12,10 +12,8 @@ declare global {
     interface Request {
       game_user_id?: string;
       request_id?: string;
-      rawBody?: Buffer | string;
       admin?: AuthenticatedAdminContext;
       admin_session_id?: string;
-      platform_app?: import('@/middlewares/platform-app-auth').AuthenticatedPlatformApp;
     }
   }
 }
