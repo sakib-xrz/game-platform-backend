@@ -3,6 +3,13 @@
 **Base path:** `/api/v1`  
 **Auth:** public. Every request must send `app_name`, `package_name`, and `sha_key`. All three must match an active Platform App or the request is rejected.
 
+**Open game WebView** with the `user_id` returned from sync (not `external_user_id`):
+
+```text
+https://game.maxlived.net/games/greedy?user=<user_id>
+https://game.maxlived.net/games/teen-patti?user=<user_id>
+```
+
 ---
 
 ## 1. Sync user
@@ -45,6 +52,7 @@ POST /api/v1/integrations/users/sync
   "success": true,
   "message": "Platform user created",
   "data": {
+    "user_id": "cmkabc123platformuserid",
     "external_user_id": "app-user-123",
     "email": "user@example.com",
     "name": "Rashid",
@@ -57,25 +65,7 @@ POST /api/v1/integrations/users/sync
 }
 ```
 
-**200** — updated:
-
-```json
-{
-  "statusCode": 200,
-  "success": true,
-  "message": "Platform user updated",
-  "data": {
-    "external_user_id": "app-user-123",
-    "email": "user@example.com",
-    "name": "Rashid",
-    "photo_url": "https://cdn.example.com/a.jpg",
-    "balance": "500",
-    "currency": "COIN",
-    "created": false
-  },
-  "timestamp": "2026-08-23T16:00:00.000Z"
-}
-```
+**200** — updated: same shape with `"created": false`.
 
 ---
 
@@ -144,6 +134,7 @@ GET /api/v1/integrations/users/app-user-123/coins?app_name=Greedy%20Live&package
   "success": true,
   "message": "Platform user balance fetched",
   "data": {
+    "user_id": "cmkabc123platformuserid",
     "external_user_id": "app-user-123",
     "balance": "500",
     "currency": "COIN"

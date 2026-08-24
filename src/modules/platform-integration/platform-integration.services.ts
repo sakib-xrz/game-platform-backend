@@ -110,6 +110,7 @@ const serializeUserResponse = (
   balance: bigint,
   created: boolean,
 ) => ({
+  user_id: user.id,
   external_user_id: user.external_user_id,
   email: user.email,
   name: user.display_name,
@@ -232,6 +233,7 @@ const getPlatformUserCoins = async (
   const user = await findPlatformUserOrThrow(platform_app, external_user_id.trim());
   const balance = await getWalletBalance(user.id);
   return {
+    user_id: user.id,
     external_user_id: user.external_user_id,
     balance: balance.toString(),
     currency: DEFAULT_CURRENCY_CODE,
