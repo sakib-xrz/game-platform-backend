@@ -17,7 +17,13 @@ import {
   LUCKY_77_SLOT_MAP,
   LUCKY_77_SOCKET_ROOM,
 } from '@/modules/lucky-77/lucky-77.constant';
-import { calculatePayout, pickUniformSlotIndex, slotIndexesForOption, withSerializableRetry } from '@/modules/lucky-77/lucky-77.utils';
+import {
+  calculatePayout,
+  pickUniformSlotIndex,
+  slotIndexesForOption,
+  withSerializableRetry,
+} from '@/modules/lucky-77/lucky-77.utils';
+import { getLucky77TopWinnersByRound } from '@/modules/lucky-77/lucky-77.leaderboard';
 import { secureRandomBigIntBelow } from '@/utils/crypto-rng';
 import { sha256 } from '@/utils/hash';
 import { logger } from '@/utils/logger';
@@ -331,6 +337,14 @@ const revealResult = async (round_id: string): Promise<void> => {
   if (!database_now || database_now < round.result_reveal_at) return;
 
   const revealed_at = database_now;
+  const top_winners_by_round = await getLucky77TopWinnersByRound([
+    {
+      round_id: round.id,
+      winning_option_id: round.result.winning_option.id,
+      payout_numerator: round.result.winning_option.payout_numerator,
+      payout_denominator: round.result.winning_option.payout_denominator,
+    },
+  ]);
   await withSerializableRetry(async (tx) => {
     const updated = await tx.lucky77Round.updateMany({
       where: { id: round.id, status: Lucky77RoundStatus.drawing },
@@ -353,6 +367,7 @@ const revealResult = async (round_id: string): Promise<void> => {
             payout_numerator: round.result!.winning_option.payout_numerator.toString(),
             payout_denominator: round.result!.winning_option.payout_denominator.toString(),
           },
+          top_winners: top_winners_by_round.get(round.id) ?? [],
           revealed_at: revealed_at.toISOString(),
         },
       },

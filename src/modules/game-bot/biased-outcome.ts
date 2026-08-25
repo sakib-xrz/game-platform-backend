@@ -112,7 +112,9 @@ export const pickBiasedWinner = (input: PickBiasedWinnerInput): PickBiasedWinner
   );
   const random = secureRandomBigIntBelow(total_weight);
   let cursor = 0n;
-  let winner = weighted[weighted.length - 1]?.option ?? input.options[0];
+  const fallback = weighted.at(-1)?.option;
+  if (!fallback) throw new Error('No winner options configured');
+  let winner = fallback;
   for (const item of weighted) {
     cursor += item.weight > 0n ? item.weight : 1n;
     if (random.value < cursor) {
@@ -129,11 +131,13 @@ export const pickBiasedWinner = (input: PickBiasedWinnerInput): PickBiasedWinner
 };
 
 export const pickNaturalWinner = (options: BiasedOption[]): PickBiasedWinnerResult => {
+  const fallback = options.at(-1);
+  if (!fallback) throw new Error('No winner options configured');
   const total_weight = options.reduce((sum, item) => sum + item.probability_weight, 0n);
   if (total_weight <= 0n) throw new Error('No positive probability weight configured');
   const random = secureRandomBigIntBelow(total_weight);
   let cursor = 0n;
-  let winner = options[options.length - 1];
+  let winner = fallback;
   for (const option of options) {
     cursor += option.probability_weight;
     if (random.value < cursor) {

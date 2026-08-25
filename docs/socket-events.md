@@ -181,7 +181,7 @@ Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. The winning r
 
 ### `lucky_77.round.result`
 
-Emitted only at reveal time. Contains the winning public option, `winning_slot_index`, and `revealed_at`.
+Emitted only at reveal time. Contains the winning public option, `winning_slot_index`, `revealed_at`, and `top_winners`. The podium uses the same aggregate gross-payout ranking and deterministic tie-breaks as Greedy.
 
 ### `lucky_77.round.settled` / `closed` / `cancelled` / `refunded`
 
@@ -190,6 +190,10 @@ Same round-lifecycle meaning as Greedy.
 ### `lucky_77.bet.accepted`
 
 Private `user:<user_id>` notification mirroring the accepted REST bet.
+
+### `lucky_77.bet.placed`
+
+Public `game:lucky-77` notification for every accepted chip. It contains the individual `amount`, the bettor's authoritative option total/count/timestamps, and public identity fields, while excluding wallet balance and `client_request_id`. Clients use it to animate live coins and replace the corresponding bettor aggregate; snapshot remains authoritative after reconnect.
 
 ## Greedy Classic events
 

@@ -14,6 +14,14 @@ declare global {
       request_id?: string;
       admin?: AuthenticatedAdminContext;
       admin_session_id?: string;
+      rawBody?: Buffer | string;
+      platform_app?: {
+        id: string;
+        app_name: string;
+        package_name: string;
+        sha_key: string;
+        status: import('@/generated/prisma/client').PlatformAppStatus;
+      };
     }
   }
 }

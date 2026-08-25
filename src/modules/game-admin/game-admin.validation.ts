@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { TEEN_PATTI_MIN_RESULT_DURATION_MS } from '@/modules/teen-patti/teen-patti.constant';
+import { LUCKY_77_SLOT_MAP } from '@/modules/lucky-77/lucky-77.constant';
+
+/** The physical wheel is fixed, so admin configs may only tune these codes. */
+const LUCKY_77_ALLOWED_OPTION_CODES = [...new Set(LUCKY_77_SLOT_MAP)] as string[];
 
 const positiveIntegerString = z.string().regex(/^[1-9]\d*$/);
 
@@ -164,6 +168,15 @@ export const createLucky77ConfigSchema = z.object({
       }
       if (orders.size !== value.options.length) {
         ctx.addIssue({ code: 'custom', path: ['options'], message: 'Option display_order values must be unique' });
+      }
+
+      const allowed_codes = new Set(LUCKY_77_ALLOWED_OPTION_CODES);
+      const provided_codes = new Set(value.options.map((item) => item.code));
+      const codes_match =
+        provided_codes.size === allowed_codes.size &&
+        [...provided_codes].every((code) => allowed_codes.has(code));
+      if (!codes_match) {
+        ctx.addIssue({ code: 'custom', path: ['options'], message: `Lucky 77 options must be exactly ${LUCKY_77_ALLOWED_OPTION_CODES.join(', ')}` });
       }
 
       const enabled = value.options.filter((item) => item.is_enabled);

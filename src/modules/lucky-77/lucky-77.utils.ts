@@ -1,9 +1,15 @@
 import { Prisma } from '@/generated/prisma/client';
 import prisma from '@/lib/prisma';
+import { resolveGameIdentitySync } from '@/modules/game-bot/bot-identity';
 import {
   LUCKY_77_SLOT_MAP,
   type Lucky77SlotCode,
 } from './lucky-77.constant';
+import type {
+  Lucky77BetPlacedPayload,
+  Lucky77PublicIdentity,
+  Lucky77TopWinner,
+} from './lucky-77.types';
 
 const RETRYABLE_POSTGRES_CODES = ['40001', '40P01'] as const;
 
@@ -109,6 +115,133 @@ export const withPayoutMultiplier = <T extends OptionWithPayout>(option: T) => (
 export const withPayoutMultipliers = <T extends OptionWithPayout>(
   options: T[],
 ) => options.map(withPayoutMultiplier);
+
+export type Lucky77WinnerAggregateInput = {
+  user_id: string;
+  winning_stake: bigint;
+  bet_count: number;
+  first_bet_at: Date;
+};
+
+export type Lucky77WinnerRanking = Lucky77WinnerAggregateInput & {
+  total_payout: bigint;
+};
+
+export type Lucky77WinningBetInput = {
+  user_id: string;
+  amount: bigint;
+  accepted_at: Date;
+};
+
+export const buildLucky77BetPlacedPayload = (
+  bet: {
+    id: string;
+    round_id: string;
+    option_id: string;
+    amount: bigint;
+    accepted_at: Date;
+    total_amount: bigint;
+    bet_count: number;
+    first_bet_at: Date;
+    last_bet_at: Date;
+  },
+  bettor: Lucky77PublicIdentity,
+): Lucky77BetPlacedPayload => ({
+  bet_id: bet.id,
+  round_id: bet.round_id,
+  option_id: bet.option_id,
+  amount: bet.amount.toString(),
+  accepted_at: bet.accepted_at.toISOString(),
+  total_amount: bet.total_amount.toString(),
+  bet_count: bet.bet_count,
+  first_bet_at: bet.first_bet_at.toISOString(),
+  last_bet_at: bet.last_bet_at.toISOString(),
+  bettor,
+});
+
+/**
+ * Gross payout descending, earliest accepted winning bet ascending, then user
+ * id ascending. The API and worker both use this ordering for a stable podium.
+ */
+export const compareLucky77WinnerRankings = (
+  left: Lucky77WinnerRanking,
+  right: Lucky77WinnerRanking,
+): number => {
+  if (left.total_payout !== right.total_payout) {
+    return left.total_payout > right.total_payout ? -1 : 1;
+  }
+  const accepted_at_difference =
+    left.first_bet_at.getTime() - right.first_bet_at.getTime();
+  if (accepted_at_difference !== 0) return accepted_at_difference;
+  return left.user_id < right.user_id
+    ? -1
+    : left.user_id > right.user_id
+      ? 1
+      : 0;
+};
+
+export const rankLucky77WinnerAggregates = (
+  aggregates: Lucky77WinnerAggregateInput[],
+  payout_numerator: bigint,
+  payout_denominator: bigint,
+  limit = 3,
+): Lucky77TopWinner[] =>
+  aggregates
+    .map((aggregate): Lucky77WinnerRanking => ({
+      ...aggregate,
+      total_payout: calculatePayout(
+        aggregate.winning_stake,
+        payout_numerator,
+        payout_denominator,
+      ),
+    }))
+    .sort(compareLucky77WinnerRankings)
+    .slice(0, Math.max(0, limit))
+    .map((winner, index) => {
+      const identity = resolveGameIdentitySync(winner.user_id);
+      return {
+        rank: index + 1,
+        user_id: winner.user_id,
+        display_name: identity.display_name,
+        avatar_url: identity.avatar_url,
+        winning_stake: winner.winning_stake.toString(),
+        bet_count: winner.bet_count,
+        total_payout: winner.total_payout.toString(),
+        first_bet_at: winner.first_bet_at.toISOString(),
+      };
+    });
+
+export const buildLucky77TopWinners = (
+  bets: Lucky77WinningBetInput[],
+  payout_numerator: bigint,
+  payout_denominator: bigint,
+  limit = 3,
+): Lucky77TopWinner[] => {
+  const users = new Map<string, Lucky77WinnerAggregateInput>();
+  for (const bet of bets) {
+    const existing = users.get(bet.user_id);
+    if (existing) {
+      existing.winning_stake += bet.amount;
+      existing.bet_count += 1;
+      if (bet.accepted_at < existing.first_bet_at) {
+        existing.first_bet_at = bet.accepted_at;
+      }
+      continue;
+    }
+    users.set(bet.user_id, {
+      user_id: bet.user_id,
+      winning_stake: bet.amount,
+      bet_count: 1,
+      first_bet_at: bet.accepted_at,
+    });
+  }
+  return rankLucky77WinnerAggregates(
+    [...users.values()],
+    payout_numerator,
+    payout_denominator,
+    limit,
+  );
+};
 
 export const slotIndexesForOption = (code: string): number[] => {
   const indexes: number[] = [];
