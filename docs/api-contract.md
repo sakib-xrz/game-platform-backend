@@ -150,6 +150,8 @@ Used only for **placing bets inside a game round**:
 | GET | `/games/greedy-classic/rounds?page=1&limit=20` | Public |
 | GET | `/games/greedy-classic/rounds/:round_id` | Public |
 
+Greedy Classic is at feature parity with Greedy: the snapshot round includes a live `bettors` aggregate (per round/option/user) and revealed results (snapshot, history, and single-round endpoints) include a `top_winners` podium of up to three real users. A user may back multiple options in the same round (the previous one-option-per-round restriction has been removed).
+
 ### Wallet (player)
 
 | Method | Path | Auth |

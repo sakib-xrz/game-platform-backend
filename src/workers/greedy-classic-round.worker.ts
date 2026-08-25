@@ -16,7 +16,11 @@ import {
   GREEDY_CLASSIC_RNG_ALGORITHM_VERSION_BIASED,
   GREEDY_CLASSIC_SOCKET_ROOM,
 } from '@/modules/greedy-classic/greedy-classic.constant';
-import { calculatePayout, withSerializableRetry } from '@/modules/greedy-classic/greedy-classic.utils';
+import { getGreedyClassicTopWinnersByRound } from '@/modules/greedy-classic/greedy-classic.leaderboard';
+import {
+  allocateGreedyClassicWinningBetPayouts,
+  withSerializableRetry,
+} from '@/modules/greedy-classic/greedy-classic.utils';
 import { sha256 } from '@/utils/hash';
 import { logger } from '@/utils/logger';
 import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-outcome';
@@ -316,6 +320,14 @@ const revealResult = async (round_id: string): Promise<void> => {
   if (!database_now || database_now < round.result_reveal_at) return;
 
   const revealed_at = database_now;
+  const top_winners_by_round = await getGreedyClassicTopWinnersByRound([
+    {
+      round_id: round.id,
+      winning_option_id: round.result.winning_option.id,
+      payout_numerator: round.result.winning_option.payout_numerator,
+      payout_denominator: round.result.winning_option.payout_denominator,
+    },
+  ]);
   await withSerializableRetry(async (tx) => {
     const updated = await tx.greedyClassicRound.updateMany({
       where: { id: round.id, status: GreedyClassicRoundStatus.drawing },
@@ -337,6 +349,7 @@ const revealResult = async (round_id: string): Promise<void> => {
             payout_numerator: round.result!.winning_option.payout_numerator.toString(),
             payout_denominator: round.result!.winning_option.payout_denominator.toString(),
           },
+          top_winners: top_winners_by_round.get(round.id) ?? [],
           revealed_at: revealed_at.toISOString(),
         },
       },
@@ -370,33 +383,44 @@ const pendingSettlementUsers = async (round_id: string): Promise<string[]> => {
 
 const settleUser = async (round_id: string, user_id: string): Promise<void> => {
   await withSerializableRetry(async (tx) => {
-    const result = await tx.greedyClassicRoundResult.findUnique({ where: { round_id } });
+    const result = await tx.greedyClassicRoundResult.findUnique({
+      where: { round_id },
+      include: {
+        winning_option: {
+          select: { payout_numerator: true, payout_denominator: true },
+        },
+      },
+    });
     if (!result) throw new Error('Cannot settle a round without a result');
 
     const bets = await tx.greedyClassicBet.findMany({
       where: { round_id, user_id, settlement: null },
-      orderBy: { created_at: 'asc' },
+      orderBy: [{ accepted_at: 'asc' }, { id: 'asc' }],
     });
     if (!bets.length) return;
 
-    let total_winning_stake = 0n;
-    let total_payout = 0n;
-    let winning_bet_count = 0;
+    const winning_bets = bets.filter(
+      (bet) => bet.option_version_id === result.winning_option_version_id,
+    );
+    const winning_bet_count = winning_bets.length;
+    const {
+      total_winning_stake,
+      total_payout,
+      payout_by_bet,
+    } = allocateGreedyClassicWinningBetPayouts(
+      winning_bets,
+      result.winning_option.payout_numerator,
+      result.winning_option.payout_denominator,
+    );
 
     const settlement_rows = bets.map((bet) => {
       const is_win = bet.option_version_id === result.winning_option_version_id;
-      const payout = is_win ? calculatePayout(bet.amount, bet.payout_numerator, bet.payout_denominator) : 0n;
-      if (is_win) {
-        total_winning_stake += bet.amount;
-        total_payout += payout;
-        winning_bet_count += 1;
-      }
       return {
         round_id,
         bet_id: bet.id,
         result_id: result.id,
         outcome: is_win ? SettlementOutcome.win : SettlementOutcome.loss,
-        payout_amount: payout,
+        payout_amount: payout_by_bet.get(bet.id) ?? 0n,
       };
     });
 

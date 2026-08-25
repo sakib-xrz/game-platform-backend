@@ -209,7 +209,7 @@ Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. The winning r
 
 ### `greedy_classic.round.result`
 
-Emitted only at reveal time. Contains the winning public option and `revealed_at`.
+Emitted only at reveal time. Contains the winning public option, `revealed_at`, and `top_winners`. `top_winners` has at most three real users ranked by aggregate stake-inclusive gross payout, then earliest winning bet, then user ID. All winning users are still paid; this list is only the podium.
 
 ### `greedy_classic.round.settled` / `closed` / `cancelled` / `refunded`
 
@@ -218,6 +218,32 @@ Same round-lifecycle meaning as Greedy.
 ### `greedy_classic.bet.accepted`
 
 Private `user:<user_id>` notification mirroring the accepted REST bet.
+
+### `greedy_classic.bet.placed`
+
+Public `game:greedy-classic` notification for an individual accepted tap, mirroring `greedy.bet.placed`. Clients use it for coin animation and replace their in-memory aggregate with the newer authoritative count/total; snapshot remains authoritative after reconnect.
+
+```json
+{
+  "event_id": "<outbox-event-id>",
+  "bet_id": "<bet-id>",
+  "round_id": "<round-id>",
+  "option_id": "<option-id>",
+  "amount": "1000",
+  "accepted_at": "2026-08-25T00:00:00.000Z",
+  "total_amount": "3000",
+  "bet_count": 2,
+  "first_bet_at": "2026-08-25T00:00:00.000Z",
+  "last_bet_at": "2026-08-25T00:00:01.000Z",
+  "bettor": {
+    "user_id": "user-001",
+    "display_name": null,
+    "avatar_url": null
+  }
+}
+```
+
+The public event intentionally excludes wallet balance and `client_request_id`. `amount` is the individual tap for animation; `total_amount`, `bet_count`, and the aggregate timestamps are authoritative post-bet values for that round/option/user. Greedy Classic now allows a user to back multiple options in the same round, so the aggregate is scoped per round/option/user.
 
 ## Client recovery rule
 
