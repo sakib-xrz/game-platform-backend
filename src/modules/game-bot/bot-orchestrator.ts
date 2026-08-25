@@ -1,4 +1,3 @@
-import { randomInt } from 'node:crypto';
 import prisma from '@/lib/prisma';
 import {
   GameStatus,
@@ -39,12 +38,15 @@ type OpenRoundContext = {
 
 const pickChipAmount = (amounts: bigint[], persona_seed: number): bigint => {
   if (!amounts.length) return 100n;
-  const index = (persona_seed + randomInt(0, amounts.length)) % amounts.length;
+  const index = Math.abs(persona_seed) % amounts.length;
   return amounts[index] ?? amounts[0]!;
 };
 
 const pickOptionId = (option_ids: string[], persona_seed: number): string => {
-  const index = (persona_seed + randomInt(0, option_ids.length)) % option_ids.length;
+  if (!option_ids.length) {
+    throw new Error('No betting options available for bot placement');
+  }
+  const index = Math.abs(persona_seed) % option_ids.length;
   return option_ids[index] ?? option_ids[0]!;
 };
 
