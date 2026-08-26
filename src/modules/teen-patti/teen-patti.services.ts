@@ -121,10 +121,7 @@ const requestHash = (payload: PlaceBetBody): string =>
     ].join('|'),
   );
 
-const getSnapshotFromTransaction = async (
-  user_id: string,
-  tx: Prisma.TransactionClient,
-) => {
+const getSnapshot = async (user_id: string) => {
   const [
     server_time_rows,
     game,
@@ -135,10 +132,10 @@ const getSnapshotFromTransaction = async (
     config_candidates,
     current_result_candidate,
   ] = await Promise.all([
-    tx.$queryRaw<Array<{ server_time: Date }>>(
+    prisma.$queryRaw<Array<{ server_time: Date }>>(
       Prisma.sql`SELECT CURRENT_TIMESTAMP AS server_time`,
     ),
-    tx.game.findUnique({
+    prisma.game.findUnique({
       where: { code: TEEN_PATTI_GAME_CODE },
       select: {
         id: true,
@@ -166,8 +163,8 @@ const getSnapshotFromTransaction = async (
         },
       },
     }),
-    ensureWallet(user_id, tx),
-    tx.teenPattiBet.findMany({
+    ensureWallet(user_id),
+    prisma.teenPattiBet.findMany({
       where: {
         user_id,
         round: {
@@ -192,7 +189,7 @@ const getSnapshotFromTransaction = async (
       },
       orderBy: { created_at: 'asc' },
     }),
-    tx.teenPattiBet.groupBy({
+    prisma.teenPattiBet.groupBy({
       by: ['round_id', 'option_version_id', 'user_id'],
       where: {
         round: {
@@ -205,7 +202,7 @@ const getSnapshotFromTransaction = async (
       _min: { accepted_at: true },
       _max: { accepted_at: true },
     }),
-    tx.teenPattiRound.findMany({
+    prisma.teenPattiRound.findMany({
       where: {
         game: { code: TEEN_PATTI_GAME_CODE },
         status: { in: public_result_statuses },
@@ -222,7 +219,7 @@ const getSnapshotFromTransaction = async (
       orderBy: { round_number: 'desc' },
       take: 21,
     }),
-    tx.teenPattiConfigVersion.findMany({
+    prisma.teenPattiConfigVersion.findMany({
       where: {
         OR: [
           {
@@ -242,7 +239,7 @@ const getSnapshotFromTransaction = async (
       },
       select: publicConfigSelect,
     }),
-    tx.teenPattiRoundResult.findFirst({
+    prisma.teenPattiRoundResult.findFirst({
       where: {
         round: {
           game: { code: TEEN_PATTI_GAME_CODE },
@@ -277,7 +274,7 @@ const getSnapshotFromTransaction = async (
     (config_id) => !config_versions.some((config) => config.id === config_id),
   );
   if (missing_config_ids.length) {
-    const fallback_configs = await tx.teenPattiConfigVersion.findMany({
+    const fallback_configs = await prisma.teenPattiConfigVersion.findMany({
       where: { id: { in: missing_config_ids } },
       select: publicConfigSelect,
     });
@@ -308,12 +305,12 @@ const getSnapshotFromTransaction = async (
   const history_round_ids = history.map((round) => round.id);
   const [history_bet_groups, history_payout_groups] = history_round_ids.length
     ? await Promise.all([
-        tx.teenPattiBet.groupBy({
+        prisma.teenPattiBet.groupBy({
           by: ['round_id'],
           where: { round_id: { in: history_round_ids } },
           _sum: { amount: true },
         }),
-        tx.teenPattiUserPayout.groupBy({
+        prisma.teenPattiUserPayout.groupBy({
           by: ['round_id'],
           where: { round_id: { in: history_round_ids } },
           _sum: { total_payout: true },
@@ -341,7 +338,7 @@ const getSnapshotFromTransaction = async (
       ? current_result_candidate
       : null;
   if (current_round && result_is_public && !current_result) {
-    current_result = await tx.teenPattiRoundResult.findUnique({
+    current_result = await prisma.teenPattiRoundResult.findUnique({
       where: { round_id: current_round.id },
       select: publicResultSelect,
     });
@@ -467,16 +464,6 @@ const getSnapshotFromTransaction = async (
       result: decoratePublicResult(round.result),
     })),
   };
-};
-
-const getSnapshot = async (user_id: string) => {
-  // Initialize a first-time wallet outside the read-only snapshot transaction,
-  // then read it again inside the same MVCC view as bets and aggregates.
-  await ensureWallet(user_id);
-  return prisma.$transaction(
-    (tx) => getSnapshotFromTransaction(user_id, tx),
-    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
-  );
 };
 
 const placeBetTransaction = async (
