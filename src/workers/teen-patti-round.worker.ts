@@ -289,7 +289,7 @@ const applyBiasedResultAtLock = async (round_id: string): Promise<void> => {
     rank_key: hand.rank_key,
   }));
   const algorithm_version =
-    biased.algorithm_suffix === 'biased-v1'
+    biased.algorithm_suffix !== 'natural-v1'
       ? TEEN_PATTI_RNG_ALGORITHM_VERSION_BIASED
       : TEEN_PATTI_RNG_ALGORITHM_VERSION;
   const audit_hash = buildTeenPattiResultCommitment({

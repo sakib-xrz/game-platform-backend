@@ -23,7 +23,7 @@ export type PickBiasedWinnerInput = {
 
 export type PickBiasedWinnerResult = {
   option_id: string;
-  algorithm_suffix: 'biased-v1' | 'natural-v1';
+  algorithm_suffix: 'biased-v3' | 'natural-v1';
   entropy_digest: string;
 };
 
@@ -32,6 +32,14 @@ const calculatePayout = (
   payout_numerator: bigint,
   payout_denominator: bigint,
 ): bigint => (amount * payout_numerator) / payout_denominator;
+
+const humanStakeOnOption = (option_id: string, bets: BiasedBetStake[]): bigint => {
+  let total = 0n;
+  for (const bet of bets) {
+    if (!bet.is_bot && bet.option_id === option_id) total += bet.amount;
+  }
+  return total;
+};
 
 const humanNetWin = (
   option_id: string,
@@ -54,29 +62,51 @@ const humanNetWin = (
   return payout - human_stake_total;
 };
 
-const botAdvantageScore = (
-  option_id: string,
-  bets: BiasedBetStake[],
-  option: BiasedOption,
-): bigint => {
-  let bot_win = 0n;
-  let human_win = 0n;
-  for (const bet of bets) {
-    if (bet.option_id !== option_id) continue;
-    if (bet.is_bot) {
-      bot_win += calculatePayout(bet.amount, option.payout_numerator, option.payout_denominator);
-    } else {
-      human_win += calculatePayout(bet.amount, option.payout_numerator, option.payout_denominator);
-    }
-  }
-  let human_loss = 0n;
-  for (const bet of bets) {
-    if (bet.is_bot || bet.option_id === option_id) continue;
-    human_loss += bet.amount;
-  }
-  return bot_win + human_loss - human_win;
+const clampRate = (rate: number): number => {
+  if (!Number.isFinite(rate)) return 0.15;
+  if (rate < 0) return 0;
+  if (rate > 1) return 1;
+  return rate;
 };
 
+const pickWeighted = (
+  items: Array<{ option: BiasedOption; weight: bigint }>,
+  algorithm_suffix: PickBiasedWinnerResult['algorithm_suffix'],
+): PickBiasedWinnerResult => {
+  const fallback = items.at(-1)?.option;
+  if (!fallback) throw new Error('No winner options configured');
+
+  const total_weight = items.reduce((sum, item) => sum + (item.weight > 0n ? item.weight : 0n), 0n);
+  if (total_weight <= 0n) {
+    const natural = pickNaturalWinner(items.map((item) => item.option));
+    return { ...natural, algorithm_suffix };
+  }
+
+  const random = secureRandomBigIntBelow(total_weight);
+  let cursor = 0n;
+  let winner = fallback;
+  for (const item of items) {
+    if (item.weight <= 0n) continue;
+    cursor += item.weight;
+    if (random.value < cursor) {
+      winner = item.option;
+      break;
+    }
+  }
+
+  return {
+    option_id: winner.id,
+    algorithm_suffix,
+    entropy_digest: random.entropy_digest,
+  };
+};
+
+/**
+ * Random-looking winners with house/bot bias:
+ * - ~target_human_win_rate: draw among options humans actually bet (config weights)
+ * - otherwise: draw among options with ZERO human stake using natural probability_weight
+ *   (so high-payout picks like ham cannot dominate when humans sat on them)
+ */
 export const pickBiasedWinner = (input: PickBiasedWinnerInput): PickBiasedWinnerResult => {
   const human_bet_count = input.bets.filter((bet) => !bet.is_bot).length;
   const use_bias =
@@ -87,47 +117,32 @@ export const pickBiasedWinner = (input: PickBiasedWinnerInput): PickBiasedWinner
     return pickNaturalWinner(input.options);
   }
 
-  const human_win_pool = input.options.filter((option) => humanNetWin(option.id, input.bets, option) > 0n);
-  const bot_favor_pool = input.options.filter(
-    (option) => botAdvantageScore(option.id, input.bets, option) >= 0n,
+  const human_options = input.options.filter(
+    (option) => humanStakeOnOption(option.id, input.bets) > 0n,
+  );
+  // Hard rule: house path never lands on something a human already bet.
+  const house_options = input.options.filter(
+    (option) => humanStakeOnOption(option.id, input.bets) === 0n,
   );
 
-  const roll = Math.random();
-  const pick_from_human = roll < input.target_human_win_rate && human_win_pool.length > 0;
+  const rate = clampRate(input.target_human_win_rate);
+  const roll = Number(secureRandomBigIntBelow(10_000n).value) / 10_000;
+  const pick_from_human = roll < rate && human_options.length > 0;
+
   const pool = pick_from_human
-    ? human_win_pool
-    : bot_favor_pool.length
-      ? bot_favor_pool
-      : input.options;
+    ? human_options
+    : house_options.length
+      ? house_options
+      : // Humans covered every option — fall back to ones that do not net-pay humans.
+        input.options.filter((option) => humanNetWin(option.id, input.bets, option) <= 0n);
 
-  const weighted = pool.map((option) => ({
+  const safe_pool = pool.length ? pool : input.options;
+  const weighted = safe_pool.map((option) => ({
     option,
-    weight: pick_from_human
-      ? humanNetWin(option.id, input.bets, option)
-      : botAdvantageScore(option.id, input.bets, option),
+    weight: option.probability_weight > 0n ? option.probability_weight : 1n,
   }));
-  const total_weight = weighted.reduce(
-    (sum, item) => sum + (item.weight > 0n ? item.weight : 1n),
-    0n,
-  );
-  const random = secureRandomBigIntBelow(total_weight);
-  let cursor = 0n;
-  const fallback = weighted.at(-1)?.option;
-  if (!fallback) throw new Error('No winner options configured');
-  let winner = fallback;
-  for (const item of weighted) {
-    cursor += item.weight > 0n ? item.weight : 1n;
-    if (random.value < cursor) {
-      winner = item.option;
-      break;
-    }
-  }
 
-  return {
-    option_id: winner.id,
-    algorithm_suffix: 'biased-v1',
-    entropy_digest: random.entropy_digest,
-  };
+  return pickWeighted(weighted, 'biased-v3');
 };
 
 export const pickNaturalWinner = (options: BiasedOption[]): PickBiasedWinnerResult => {

@@ -238,7 +238,7 @@ const generateResult = async (round_id: string): Promise<void> => {
 
   const generated_at = database_now;
   const algorithm_version =
-    biased.algorithm_suffix === 'biased-v1'
+    biased.algorithm_suffix !== 'natural-v1'
       ? LUCKY_77_RNG_ALGORITHM_VERSION_BIASED
       : LUCKY_77_RNG_ALGORITHM_VERSION;
   const entropy_digest = sha256(

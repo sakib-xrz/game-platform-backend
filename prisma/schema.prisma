@@ -1628,11 +1628,13 @@ model GameBot {
   display_name  String
   avatar_url    String?
   persona_seed  Int           @default(0)
+  game_code     String        @default("LEGACY")
   status        GameBotStatus @default(active)
   created_at    DateTime      @default(now())
   updated_at    DateTime      @updatedAt
 
   @@index([status, updated_at])
+  @@index([game_code, status])
   @@map("game_bots")
 }
 

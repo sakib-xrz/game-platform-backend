@@ -60,24 +60,25 @@ describe('bot-identity', () => {
   });
 
   it('does not treat arbitrary ids as bots without cache data', () => {
-    expect(isBotUserIdSync('gbot01aarav')).toBe(false);
+    expect(isBotUserIdSync('gbot-greedy-01-aarav')).toBe(false);
   });
 
   it('marks seeded bots as bots after refreshBotIdentityCache', async () => {
     mocks.gameBotFindMany.mockResolvedValue([
       {
-        id: 'gbot01aarav',
+        id: 'gbot-greedy-01-aarav',
         display_name: 'Aarav',
         avatar_url: null,
         persona_seed: 1,
+        game_code: 'GREEDY',
       },
     ]);
 
     await refreshBotIdentityCache();
 
-    expect(isBotUserIdSync('gbot01aarav')).toBe(true);
+    expect(isBotUserIdSync('gbot-greedy-01-aarav')).toBe(true);
     expect(isBotUserIdSync('human-player')).toBe(false);
-    expect(resolveGameIdentitySync('gbot01aarav')).toEqual({
+    expect(resolveGameIdentitySync('gbot-greedy-01-aarav')).toEqual({
       display_name: 'Aarav',
       avatar_url: null,
     });

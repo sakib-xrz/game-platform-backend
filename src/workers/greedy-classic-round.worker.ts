@@ -226,7 +226,7 @@ const generateResult = async (round_id: string): Promise<void> => {
 
   const generated_at = database_now;
   const algorithm_version =
-    biased.algorithm_suffix === 'biased-v1'
+    biased.algorithm_suffix !== 'natural-v1'
       ? GREEDY_CLASSIC_RNG_ALGORITHM_VERSION_BIASED
       : GREEDY_CLASSIC_RNG_ALGORITHM_VERSION;
   const audit_hash = sha256([
