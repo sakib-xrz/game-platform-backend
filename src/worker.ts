@@ -23,6 +23,7 @@ import {
   runGreedyClassicTick,
 } from '@/workers/greedy-classic-round.worker';
 import { runBotOrchestratorTick } from '@/modules/game-bot/bot-orchestrator';
+import { refreshBotIdentityCache } from '@/modules/game-bot/bot-identity';
 import { logger } from '@/utils/logger';
 
 const GREEDY_LEASE_KEY = 'game-worker:greedy';
@@ -104,6 +105,8 @@ const refreshLeadership = (): Promise<void> => {
 const main = async (): Promise<void> => {
   await prisma.$connect();
   await connectRedis();
+  // Warm bot identity cache before any settlement so isBotUserIdSync is reliable.
+  await refreshBotIdentityCache();
   await recoverGreedyRuntime();
   await recoverTeenPattiRuntime();
   await recoverLucky77Runtime();
@@ -120,6 +123,7 @@ const main = async (): Promise<void> => {
 
   while (!stopping) {
     try {
+      await refreshBotIdentityCache();
       // The games have independent runtimes and tables. Advancing them in
       // parallel prevents a slow transition or settlement in one game from
       // stretching every phase deadline in the other game.

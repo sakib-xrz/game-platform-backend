@@ -317,7 +317,9 @@ This produces approximately the same expected return per option (~90.8%) under t
 
 ## Teen Patti rules
 
-Three decks (`DECK_A` / `DECK_B` / `DECK_C`). Bet on any 1–3 during `betting_open`. After lock, one 52-card deck is shuffled with crypto RNG and 9 cards are dealt (3 per deck). Hands use Indian Teen Patti ranking (trail, pure sequence, sequence, color, pair, high card; A-2-3 is the highest sequence). Ties for highest are redealt (cap 10). The unique highest deck wins. Pot = all stakes; house takes `rake_bps` (seed 500 = 5%); remainder is split among winning-deck stakes with integer leftover kept by the house. If nobody bet the winner, the house keeps the pot.
+Three decks (`DECK_A` / `DECK_B` / `DECK_C`). Bet on any 1–3 during `betting_open`. After lock, one 52-card deck is shuffled with crypto RNG and 9 cards are dealt (3 per deck). Hands use Indian Teen Patti ranking (trail, pure sequence, sequence, color, pair, high card; A-2-3 is the highest sequence). Ties for highest are redealt (cap 10). The unique highest deck wins.
+
+**Human payout:** each winning human bet pays a fixed **2× stake** (stake-inclusive: bet 100 → credit 200). Bot bets do not affect human payout amounts. Rake (`rake_bps`) is retained in config for admin/display but does not reduce human fixed-double settlement. Bot settlements are recorded without wallet credits.
 
 ## Inputs still needed later
 
