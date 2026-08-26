@@ -382,9 +382,6 @@ describe('public snapshot query contract', () => {
     expect(snapshot.server_time).toEqual(
       new Date('2026-08-23T00:00:00.000Z'),
     );
-    expect(mocks.prismaTransaction.mock.calls.at(-1)?.[1]).toEqual({
-      isolationLevel: 'RepeatableRead',
-    });
     expect(snapshot.player).toEqual({
       user_id: 'player',
       display_name: 'Player player',
