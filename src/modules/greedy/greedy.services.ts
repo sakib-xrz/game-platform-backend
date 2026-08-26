@@ -339,7 +339,8 @@ const getSnapshot = async (user_id: string) => {
               group.round_id === current_round.id &&
               group._sum.amount !== null &&
               group._min.accepted_at !== null &&
-              group._max.accepted_at !== null,
+              group._max.accepted_at !== null &&
+              !isBotUserIdSync(group.user_id),
           )
           .sort((left, right) => {
             const recent_difference =

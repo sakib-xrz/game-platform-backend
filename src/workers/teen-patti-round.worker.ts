@@ -19,7 +19,7 @@ import {
 } from '@/modules/teen-patti/teen-patti.constant';
 import { effectiveTeenPattiResultDurationMs } from '@/modules/teen-patti/teen-patti.config';
 import { dealUniqueWinner, dealWithWinningOption } from '@/modules/teen-patti/teen-patti.deal';
-import { splitPot } from '@/modules/teen-patti/teen-patti.payout';
+import { allocateTeenPattiFixedDoublePayouts } from '@/modules/teen-patti/teen-patti.payout';
 import { buildTeenPattiPreview } from '@/modules/teen-patti/teen-patti.public';
 import { buildTeenPattiResultCommitment } from '@/modules/teen-patti/teen-patti.audit';
 import { withSerializableRetry } from '@/modules/greedy/greedy.utils';
@@ -249,20 +249,14 @@ const applyBiasedResultAtLock = async (round_id: string): Promise<void> => {
   }
 
   const round_bets = await loadTeenPattiRoundBets(round.id);
-  const pot = round_bets.reduce((sum, bet) => sum + bet.amount, 0n);
-  const distributable =
-    pot - (pot * BigInt(round.config_version.rake_bps)) / 10000n;
-  const biased_options = options.map((option) => {
-    const stake_on_option = round_bets
-      .filter((bet) => bet.option_id === option.id)
-      .reduce((sum, bet) => sum + bet.amount, 0n);
-    return {
-      id: option.id,
-      probability_weight: 1n,
-      payout_numerator: distributable > 0n ? distributable : 1n,
-      payout_denominator: stake_on_option > 0n ? stake_on_option : 1n,
-    };
-  });
+  // Fixed 2× human payout: bias scoring uses human-relevant odds only
+  // (bots still participate as bets for UI / bias gates, not pot math).
+  const biased_options = options.map((option) => ({
+    id: option.id,
+    probability_weight: 1n,
+    payout_numerator: 2n,
+    payout_denominator: 1n,
+  }));
 
   const policy = await getGameBotPolicy();
   const biased = policy.enabled
@@ -640,36 +634,17 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
       game_id: string;
       result_id: string;
       winning_option_version_id: string;
-      rake_bps: number;
-      pot: bigint;
-      total_winning_stake: bigint;
     }>>(Prisma.sql`
       WITH round_context AS (
         SELECT
           game_round.game_id,
           result.id AS result_id,
-          result.winning_option_version_id,
-          config.rake_bps
+          result.winning_option_version_id
         FROM teen_patti_rounds AS game_round
         JOIN teen_patti_round_results AS result
           ON result.round_id = game_round.id
-        JOIN teen_patti_config_versions AS config
-          ON config.id = game_round.config_version_id
         WHERE game_round.id = ${round_id}
           AND game_round.status = 'settling'::teen_patti_round_status
-      ),
-      round_totals AS (
-        SELECT
-          COALESCE(SUM(bet.amount), 0)::bigint AS pot,
-          COALESCE(
-            SUM(bet.amount) FILTER (
-              WHERE bet.option_version_id = context.winning_option_version_id
-            ),
-            0
-          )::bigint AS total_winning_stake
-        FROM teen_patti_bets AS bet
-        CROSS JOIN round_context AS context
-        WHERE bet.round_id = ${round_id}
       )
       SELECT
         bet.id AS bet_id,
@@ -678,13 +653,9 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
         bet.amount,
         context.game_id,
         context.result_id,
-        context.winning_option_version_id,
-        context.rake_bps,
-        totals.pot,
-        totals.total_winning_stake
+        context.winning_option_version_id
       FROM teen_patti_bets AS bet
       CROSS JOIN round_context AS context
-      CROSS JOIN round_totals AS totals
       WHERE bet.round_id = ${round_id}
         AND bet.user_id = ${user_id}
         AND NOT EXISTS (
@@ -700,34 +671,31 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
     if (bets.some((bet) => bet.wallet_id !== context.wallet_id)) {
       throw new Error('A player cannot settle one round across multiple wallets');
     }
-    const split = splitPot(
-      context.pot,
-      context.rake_bps,
-      [context.total_winning_stake],
-    );
 
-    let total_winning_stake_user = 0n;
-    let total_payout = 0n;
-    let winning_bet_count = 0;
+    const allocation = allocateTeenPattiFixedDoublePayouts(
+      bets.map((bet) => ({
+        id: bet.bet_id,
+        amount: bet.amount,
+        is_winning:
+          bet.option_version_id === context.winning_option_version_id,
+      })),
+    );
+    const total_winning_stake_user = allocation.total_winning_stake;
+    const total_payout = allocation.total_payout;
+    const winning_bet_count = bets.filter(
+      (bet) => bet.option_version_id === context.winning_option_version_id,
+    ).length;
 
     const settlement_rows = bets.map((bet) => {
       const is_win =
         bet.option_version_id === context.winning_option_version_id;
-      const payout = is_win && context.total_winning_stake > 0n
-        ? (split.distributable * bet.amount) / context.total_winning_stake
-        : 0n;
-      if (is_win) {
-        total_winning_stake_user += bet.amount;
-        total_payout += payout;
-        winning_bet_count += 1;
-      }
       return {
         id: randomUUID(),
         round_id,
         bet_id: bet.bet_id,
         result_id: context.result_id,
         outcome: is_win ? SettlementOutcome.win : SettlementOutcome.loss,
-        payout_amount: payout,
+        payout_amount: allocation.payout_by_bet.get(bet.bet_id) ?? 0n,
       };
     });
 

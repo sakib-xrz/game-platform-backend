@@ -1,5 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { allocateTeenPattiUserPayouts } from '@/modules/teen-patti/teen-patti.payout';
+import {
+  allocateTeenPattiFixedDoublePayouts,
+  allocateTeenPattiUserPayouts,
+  calculateHumanFixedDoublePayout,
+} from '@/modules/teen-patti/teen-patti.payout';
+
+describe('Teen Patti fixed double human payout', () => {
+  it('pays exactly 2× stake regardless of how large other stakes would be in a pool', () => {
+    // Regression: previously parimutuel pool included bot stakes, so a human
+    // bet of 100 could pay far more or less than 200 depending on bots.
+    const allocation = allocateTeenPattiFixedDoublePayouts([
+      { id: 'human-win', amount: 100n, is_winning: true },
+      { id: 'human-loss', amount: 50n, is_winning: false },
+    ]);
+
+    expect(calculateHumanFixedDoublePayout(100n)).toBe(200n);
+    expect(allocation.total_winning_stake).toBe(100n);
+    expect(allocation.total_payout).toBe(200n);
+    expect(allocation.payout_by_bet.get('human-win')).toBe(200n);
+    expect(allocation.payout_by_bet.get('human-loss')).toBe(0n);
+  });
+
+  it('doubles each winning bet independently when the user has multiple bets', () => {
+    const allocation = allocateTeenPattiFixedDoublePayouts([
+      { id: 'win-a', amount: 100n, is_winning: true },
+      { id: 'win-b', amount: 250n, is_winning: true },
+      { id: 'loss', amount: 10_000n, is_winning: false },
+    ]);
+
+    expect(allocation.total_winning_stake).toBe(350n);
+    expect(allocation.total_payout).toBe(700n);
+    expect(allocation.payout_by_bet.get('win-a')).toBe(200n);
+    expect(allocation.payout_by_bet.get('win-b')).toBe(500n);
+    expect(allocation.payout_by_bet.get('loss')).toBe(0n);
+  });
+
+  it('returns zeros when the user did not bet the winner', () => {
+    const allocation = allocateTeenPattiFixedDoublePayouts([
+      { id: 'loss-a', amount: 100n, is_winning: false },
+      { id: 'loss-b', amount: 50_000n, is_winning: false },
+    ]);
+
+    expect(allocation.total_winning_stake).toBe(0n);
+    expect(allocation.total_payout).toBe(0n);
+    expect(allocation.payout_by_bet.get('loss-a')).toBe(0n);
+    expect(allocation.payout_by_bet.get('loss-b')).toBe(0n);
+  });
+});
 
 describe('Teen Patti user payout allocation', () => {
   it('makes repeated winning bets pay exactly like their grouped stake', () => {

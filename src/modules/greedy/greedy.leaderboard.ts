@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { getActiveBotIds } from '@/modules/game-bot/bot-identity';
 import type { GreedyTopWinner } from './greedy.types';
 import { rankGreedyWinnerAggregates } from './greedy.utils';
 
@@ -12,6 +13,7 @@ export type GreedyLeaderboardTarget = {
 /**
  * Loads already-grouped winning stakes, then applies the shared pure ranking
  * rules. One query can decorate the current result and a page of history.
+ * Bot users are excluded — the podium is humans only.
  */
 export const getGreedyTopWinnersByRound = async (
   targets: GreedyLeaderboardTarget[],
@@ -25,6 +27,8 @@ export const getGreedyTopWinnersByRound = async (
 
   if (!unique_targets.length) return winners_by_round;
 
+  const bot_ids = new Set(await getActiveBotIds());
+
   const aggregates = await prisma.greedyBet.groupBy({
     by: ['round_id', 'user_id'],
     where: {
@@ -32,6 +36,9 @@ export const getGreedyTopWinnersByRound = async (
         round_id: target.round_id,
         option_version_id: target.winning_option_id,
       })),
+      ...(bot_ids.size
+        ? { user_id: { notIn: [...bot_ids] } }
+        : {}),
     },
     _sum: { amount: true },
     _count: { _all: true },
@@ -51,7 +58,8 @@ export const getGreedyTopWinnersByRound = async (
   for (const aggregate of aggregates) {
     if (
       aggregate._sum.amount === null ||
-      aggregate._min.accepted_at === null
+      aggregate._min.accepted_at === null ||
+      bot_ids.has(aggregate.user_id)
     ) {
       continue;
     }

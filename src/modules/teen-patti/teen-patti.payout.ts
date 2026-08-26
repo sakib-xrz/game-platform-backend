@@ -18,6 +18,44 @@ export type TeenPattiUserPayoutAllocation = {
   payout_by_bet: Map<string, bigint>;
 };
 
+/** Stake-inclusive fixed double: bet 100 → payout 200. */
+export const calculateHumanFixedDoublePayout = (amount: bigint): bigint => {
+  if (amount < 0n) throw new Error('Bet amount cannot be negative');
+  return amount * 2n;
+};
+
+/**
+ * Human winners receive exactly 2× their own stake, independent of other
+ * players' (including bots') bets and independent of rake.
+ */
+export const allocateTeenPattiFixedDoublePayouts = (
+  bets: TeenPattiSettlementBetInput[],
+): TeenPattiUserPayoutAllocation => {
+  const payout_by_bet = new Map<string, bigint>();
+  let total_winning_stake = 0n;
+  let total_payout = 0n;
+
+  for (const bet of bets) {
+    if (bet.amount < 0n) throw new Error('Bet amount cannot be negative');
+    if (payout_by_bet.has(bet.id)) throw new Error(`Duplicate bet id: ${bet.id}`);
+
+    if (bet.is_winning) {
+      const payout = calculateHumanFixedDoublePayout(bet.amount);
+      payout_by_bet.set(bet.id, payout);
+      total_winning_stake += bet.amount;
+      total_payout += payout;
+    } else {
+      payout_by_bet.set(bet.id, 0n);
+    }
+  }
+
+  return {
+    total_winning_stake,
+    total_payout,
+    payout_by_bet,
+  };
+};
+
 export const splitPot = (
   pot: bigint,
   rake_bps: number,
