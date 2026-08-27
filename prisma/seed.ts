@@ -719,13 +719,14 @@ const main = async (): Promise<void> => {
 
   let bot_persona_seed = 0;
   let seeded_bot_count = 0;
+  const active_bot_ids: string[] = [];
   for (const game_code of BOT_GAME_CODES) {
     const slug = botGameSlug(game_code);
     for (const [index, display_name] of BOT_NAME_POOLS[game_code].entries()) {
       bot_persona_seed += 1;
       const nn = String(index + 1).padStart(2, '0');
-      const name_prefix = display_name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6);
-      const id = `gbot-${slug}-${nn}-${name_prefix}`;
+      const id = `gbot-${slug}-${nn}`;
+      active_bot_ids.push(id);
       await prisma.gameBot.upsert({
         where: { id },
         update: {
@@ -747,6 +748,15 @@ const main = async (): Promise<void> => {
       seeded_bot_count += 1;
     }
   }
+
+  await prisma.gameBot.updateMany({
+    where: {
+      status: GameBotStatus.active,
+      game_code: { in: [...BOT_GAME_CODES] },
+      id: { notIn: active_bot_ids },
+    },
+    data: { status: GameBotStatus.disabled },
+  });
 
   console.log({
     seeded: true,
