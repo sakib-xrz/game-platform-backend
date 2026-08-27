@@ -38,15 +38,18 @@ type OpenRoundContext = {
 
 const pickChipAmount = (amounts: bigint[], persona_seed: number): bigint => {
   if (!amounts.length) return 100n;
-  const index = Math.abs(persona_seed) % amounts.length;
+  // Mix persona with crypto noise so chips vary across rounds.
+  const jitter = Math.floor(Math.random() * amounts.length);
+  const index = Math.abs(persona_seed + jitter) % amounts.length;
   return amounts[index] ?? amounts[0]!;
 };
 
-const pickOptionId = (option_ids: string[], persona_seed: number): string => {
+const pickOptionId = (option_ids: string[]): string => {
   if (!option_ids.length) {
     throw new Error('No betting options available for bot placement');
   }
-  const index = Math.abs(persona_seed) % option_ids.length;
+  // Spread bots across options randomly so winners do not collapse to 1–2 foods.
+  const index = Math.floor(Math.random() * option_ids.length);
   return option_ids[index] ?? option_ids[0]!;
 };
 
@@ -103,7 +106,7 @@ const placeGameBotBet = async (
   const option_id =
     context.game_code === TEEN_PATTI_GAME_CODE && context.winning_option_id
       ? context.winning_option_id
-      : pickOptionId(context.option_ids, bot.persona_seed + sequence);
+      : pickOptionId(context.option_ids);
   const client_request_id = `bot:${context.round_id}:${bot.id}:${sequence}`;
   const payload = {
     round_id: context.round_id,
@@ -263,12 +266,18 @@ const orchestrateRound = async (context: OpenRoundContext, policy: Awaited<Retur
   const bets_to_place = Math.max(0, target_bots - existing_bot_bets);
   if (!bets_to_place) return;
 
-  const bots = await getActiveBots();
+  const bots = await getActiveBots(context.game_code);
   if (!bots.length) return;
 
+  const round_hash = [...context.round_id].reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const selected = bots
     .slice()
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => {
+      const left_rank = (left.persona_seed + round_hash) % 10_000;
+      const right_rank = (right.persona_seed + round_hash) % 10_000;
+      if (left_rank !== right_rank) return left_rank - right_rank;
+      return left.id.localeCompare(right.id);
+    })
     .slice(0, bets_to_place);
 
   for (const [index, bot] of selected.entries()) {

@@ -201,6 +201,132 @@ describe('public snapshot query contract', () => {
       'older-greedy-round',
     ]);
     expect(mocks.greedyRoundFindMany.mock.calls[0]![0].take).toBe(21);
+    expect(snapshot.round?.result).toBeNull();
+    expect(snapshot.round?.winning_option_index).toBeNull();
+  });
+
+  it('exposes winning_option_index during drawing while keeping result hidden', async () => {
+    const active_config = config('greedy-active-config');
+    const frozen_config = {
+      ...config('greedy-frozen-config'),
+      options: [
+        {
+          id: 'opt-hot-dog',
+          code: 'HOT_DOG',
+          name: 'Hot dog',
+          image_url: null,
+          display_order: 1,
+          payout_numerator: 10n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-kebab',
+          code: 'KEBAB',
+          name: 'Kebab',
+          image_url: null,
+          display_order: 2,
+          payout_numerator: 15n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-ham',
+          code: 'HAM',
+          name: 'Ham',
+          image_url: null,
+          display_order: 3,
+          payout_numerator: 25n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-steak',
+          code: 'STEAK',
+          name: 'Steak',
+          image_url: null,
+          display_order: 4,
+          payout_numerator: 45n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-carrot',
+          code: 'CARROT',
+          name: 'Carrot',
+          image_url: null,
+          display_order: 5,
+          payout_numerator: 5n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-corn',
+          code: 'CORN',
+          name: 'Corn',
+          image_url: null,
+          display_order: 6,
+          payout_numerator: 5n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-cabbage',
+          code: 'CABBAGE',
+          name: 'Cabbage',
+          image_url: null,
+          display_order: 7,
+          payout_numerator: 5n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+        {
+          id: 'opt-tomato',
+          code: 'TOMATO',
+          name: 'Tomato',
+          image_url: null,
+          display_order: 8,
+          payout_numerator: 5n,
+          payout_denominator: 1n,
+          is_enabled: true,
+        },
+      ],
+    };
+    const current_result = {
+      id: 'result-drawing',
+      round_id: 'greedy-round',
+      algorithm_version: 'test-v1',
+      generated_at: new Date(10_000),
+      revealed_at: null,
+      winning_option: frozen_config.options[4]!,
+    };
+    mocks.greedyConfigFindMany.mockResolvedValue([
+      active_config,
+      frozen_config,
+    ]);
+    mocks.greedyResultFindFirst.mockResolvedValue(current_result);
+    mocks.gameFindUnique.mockResolvedValue({
+      id: 'greedy-game',
+      code: 'GREEDY',
+      name: 'Greedy',
+      status: 'active',
+      greedy_runtime_state: {
+        status: 'running',
+        revision: 1n,
+        active_config_version_id: active_config.id,
+        current_round: {
+          ...round('greedy-round', frozen_config),
+          status: 'drawing',
+          config_version_id: frozen_config.id,
+        },
+      },
+    });
+
+    const snapshot = await GreedyService.getSnapshot('player');
+
+    expect(snapshot.round?.status).toBe('drawing');
+    expect(snapshot.round?.result).toBeNull();
+    expect(snapshot.round?.winning_option_index).toBe(4);
   });
 
   it('adds the aggregate Top 3 contract only to a revealed Greedy result', async () => {
@@ -262,6 +388,7 @@ describe('public snapshot query contract', () => {
         first_bet_at: new Date(1_000).toISOString(),
       },
     ]);
+    expect(snapshot.round?.winning_option_index).toBe(0);
   });
 
   it('filters disabled Teen Patti options and excludes the current round from history', async () => {

@@ -112,6 +112,21 @@ export const withPayoutMultipliers = <T extends OptionWithPayout>(
   options: T[],
 ) => options.map(withPayoutMultiplier);
 
+/**
+ * 0-based wheel index for the winning option. Callers must pass enabled
+ * options already ordered by display_order ascending (same order the UI uses).
+ */
+export const winningOptionIndex = (
+  options: Array<{ id: string }>,
+  winning_option_id: string,
+): number => {
+  const index = options.findIndex((option) => option.id === winning_option_id);
+  if (index < 0) {
+    throw new Error('Winning option is not present in the enabled option list');
+  }
+  return index;
+};
+
 export type GreedyClassicWinnerAggregateInput = {
   user_id: string;
   winning_stake: bigint;

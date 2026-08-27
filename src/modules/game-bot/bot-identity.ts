@@ -6,13 +6,16 @@ const BOT_CACHE_KEY = 'game-bots:active-ids';
 const BOT_PROFILE_CACHE_KEY = 'game-bots:profiles';
 const CACHE_TTL_SECONDS = 60;
 
-let memory_loaded_at = 0;
-let memory_bot_records: Array<{
+type BotRecord = {
   id: string;
   display_name: string;
   avatar_url: string | null;
   persona_seed: number;
-}> = [];
+  game_code: string;
+};
+
+let memory_loaded_at = 0;
+let memory_bot_records: BotRecord[] = [];
 
 const loadActiveBots = async () => {
   const now = Date.now();
@@ -33,7 +36,7 @@ const loadActiveBots = async () => {
       const bots = prisma.gameBot
         ? await prisma.gameBot.findMany({
             where: { id: { in: cached_ids }, status: GameBotStatus.active },
-            select: { id: true, display_name: true, avatar_url: true, persona_seed: true },
+            select: { id: true, display_name: true, avatar_url: true, persona_seed: true, game_code: true },
           })
         : [];
       memory_bot_records = bots;
@@ -51,7 +54,7 @@ const loadActiveBots = async () => {
   const bots = prisma.gameBot
     ? await prisma.gameBot.findMany({
         where: { status: GameBotStatus.active },
-        select: { id: true, display_name: true, avatar_url: true, persona_seed: true },
+        select: { id: true, display_name: true, avatar_url: true, persona_seed: true, game_code: true },
       })
     : [];
   memory_bot_records = bots;
@@ -101,9 +104,10 @@ export const getActiveBotIds = async (): Promise<string[]> => {
   return [...ids];
 };
 
-export const getActiveBots = async () => {
+export const getActiveBots = async (game_code?: string) => {
   const { records } = await loadActiveBots();
-  return records;
+  if (!game_code) return records;
+  return records.filter((bot) => bot.game_code === game_code);
 };
 
 export type GamePublicIdentity = {

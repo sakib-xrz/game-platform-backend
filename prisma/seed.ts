@@ -15,6 +15,12 @@ import {
   WalletLedgerType,
 } from '../src/generated/prisma/client';
 import { hashAdminPassword, normalizeAdminEmail } from '../src/modules/admin/admin.crypto';
+import {
+  assertBotNamePools,
+  BOT_GAME_CODES,
+  BOT_NAME_POOLS,
+  botGameSlug,
+} from '../src/modules/game-bot/bot-name-pools';
 
 const database_url = process.env.DATABASE_URL;
 
@@ -651,11 +657,7 @@ const main = async (): Promise<void> => {
     }
   }
 
-  const bot_names = [
-    'Aarav', 'Sara', 'Rahim', 'Nusrat', 'Karim', 'Maya', 'Imran', 'Laila', 'Farhan', 'Anika',
-    'Tanvir', 'Priya', 'Shuvo', 'Nadia', 'Arif', 'Meera', 'Rashed', 'Tania', 'Kabir', 'Elina',
-    'Samir', 'Diya', 'Hassan', 'Zara', 'Omar', 'Isha', 'Naveen', 'Riya', 'Faiz', 'Amira',
-  ];
+  assertBotNamePools();
 
   await prisma.gameBotPolicy.upsert({
     where: { code: 'default' },
@@ -670,19 +672,40 @@ const main = async (): Promise<void> => {
     },
   });
 
-  for (const [index, display_name] of bot_names.entries()) {
-    const id = `gbot${String(index + 1).padStart(2, '0')}${display_name.toLowerCase().slice(0, 4)}`;
-    await prisma.gameBot.upsert({
-      where: { id },
-      update: { display_name, status: GameBotStatus.active },
-      create: {
-        id,
-        display_name,
-        avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(display_name)}`,
-        persona_seed: index + 1,
-        status: GameBotStatus.active,
-      },
-    });
+  await prisma.gameBot.updateMany({
+    where: { OR: [{ game_code: 'LEGACY' }, { id: { startsWith: 'gbot0' } }] },
+    data: { status: GameBotStatus.disabled, game_code: 'LEGACY' },
+  });
+
+  let bot_persona_seed = 0;
+  let seeded_bot_count = 0;
+  for (const game_code of BOT_GAME_CODES) {
+    const slug = botGameSlug(game_code);
+    for (const [index, display_name] of BOT_NAME_POOLS[game_code].entries()) {
+      bot_persona_seed += 1;
+      const nn = String(index + 1).padStart(2, '0');
+      const name_prefix = display_name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6);
+      const id = `gbot-${slug}-${nn}-${name_prefix}`;
+      await prisma.gameBot.upsert({
+        where: { id },
+        update: {
+          display_name,
+          game_code,
+          persona_seed: bot_persona_seed,
+          status: GameBotStatus.active,
+          avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(display_name)}`,
+        },
+        create: {
+          id,
+          display_name,
+          game_code,
+          avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(display_name)}`,
+          persona_seed: bot_persona_seed,
+          status: GameBotStatus.active,
+        },
+      });
+      seeded_bot_count += 1;
+    }
   }
 
   console.log({
@@ -700,6 +723,7 @@ const main = async (): Promise<void> => {
     greedy_classic_config_version: greedy_classic_config.version,
     runtime_status: 'stopped',
     admin: admin.email,
+    game_bots: seeded_bot_count,
   });
 };
 

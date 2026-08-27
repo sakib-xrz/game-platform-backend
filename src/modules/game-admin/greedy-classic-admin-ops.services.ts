@@ -91,14 +91,18 @@ const updateDraft = async (config_id: string, payload: CreateGreedyClassicConfig
     const options = await resolveGreedyClassicOptionAssets(tx, payload.options);
     const target = await tx.greedyClassicConfigVersion.findFirst({
       where: { id: config_id, game_id: game.id },
-      include: { options: true, chip_values: true, _count: { select: { rounds: true, results: true } } },
+      include: { options: true, chip_values: true },
     });
     if (!target) throw new AppError(httpStatus.NOT_FOUND, 'Config version not found');
     if (target.status !== ConfigVersionStatus.draft && target.status !== ConfigVersionStatus.published) {
       throw new AppError(httpStatus.CONFLICT, 'Only draft or published configs can be edited');
     }
 
-    const hasRoundRefs = target._count.rounds > 0 || target._count.results > 0;
+    const [referencedRound, referencedResult] = await Promise.all([
+      tx.greedyClassicRound.findFirst({ where: { config_version_id: target.id }, select: { id: true } }),
+      tx.greedyClassicRoundResult.findFirst({ where: { config_version_id: target.id }, select: { id: true } }),
+    ]);
+    const hasRoundRefs = Boolean(referencedRound || referencedResult);
     const rootData = {
       betting_duration_ms: payload.betting_duration_ms,
       lock_duration_ms: payload.lock_duration_ms,
@@ -190,7 +194,7 @@ const updateDraft = async (config_id: string, payload: CreateGreedyClassicConfig
 
     await writeAdminAudit(tx, { ...context, outcome: 'success' }, { action: 'greedy_classic.config.updated', entity_type: 'greedy_classic_config_version', entity_id: target.id, old_values: toConfigJson(target), new_values: toConfigJson(updated) });
     return updated;
-  });
+  }, { maxWait: 5000, timeout: 15000 });
 
 const cloneConfig = async (config_id: string, context: AdminAuditContext = {}) =>
   prisma.$transaction(async (tx) => {
