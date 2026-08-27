@@ -40,6 +40,7 @@ import {
   withSerializableRetry,
   withPayoutMultiplier,
   withPayoutMultipliers,
+  winningOptionIndex,
 } from './greedy-classic.utils';
 import {
   getGreedyClassicTopWinnersByRound,
@@ -330,6 +331,18 @@ const getSnapshot = async (user_id: string) => {
       select: publicResultSelect,
     });
   }
+  // During drawing the winner is still hidden, but clients need the stop index
+  // so the highlight can land on the same option the server will reveal.
+  if (
+    current_round &&
+    current_round.status === GreedyClassicRoundStatus.drawing &&
+    !current_result
+  ) {
+    current_result = await prisma.greedyClassicRoundResult.findUnique({
+      where: { round_id: current_round.id },
+      select: publicResultSelect,
+    });
+  }
 
   const bettors: GreedyClassicBettorAggregate[] = current_round
     ? await (async () => {
@@ -419,6 +432,15 @@ const getSnapshot = async (user_id: string) => {
           options: public_current_config!.options,
           chip_values: public_current_config!.chip_values,
           bettors,
+          winning_option_index:
+            current_result &&
+            (current_round.status === GreedyClassicRoundStatus.drawing ||
+              result_is_public)
+              ? winningOptionIndex(
+                  public_current_config!.options,
+                  current_result.winning_option.id,
+                )
+              : null,
           result: result_is_public
             ? decorateResult(
                 current_result,

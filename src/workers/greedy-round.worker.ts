@@ -19,6 +19,7 @@ import {
 import { getGreedyTopWinnersByRound } from '@/modules/greedy/greedy.leaderboard';
 import {
   allocateGreedyWinningBetPayouts,
+  winningOptionIndex,
   withSerializableRetry,
 } from '@/modules/greedy/greedy.utils';
 import { secureRandomBigIntBelow } from '@/utils/crypto-rng';
@@ -265,9 +266,19 @@ const generateResult = async (round_id: string): Promise<void> => {
 const startDrawing = async (round_id: string): Promise<void> => {
   const round = await prisma.greedyRound.findUnique({
     where: { id: round_id },
-    include: { config_version: true },
+    include: {
+      config_version: {
+        include: {
+          options: {
+            where: { is_enabled: true },
+            orderBy: { display_order: 'asc' },
+          },
+        },
+      },
+      result: true,
+    },
   });
-  if (!round || round.status !== GreedyRoundStatus.result_ready) return;
+  if (!round || round.status !== GreedyRoundStatus.result_ready || !round.result) return;
 
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
     Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
@@ -277,6 +288,10 @@ const startDrawing = async (round_id: string): Promise<void> => {
   const drawing_started_at = database_now;
   const result_reveal_at = new Date(
     drawing_started_at.getTime() + round.config_version.drawing_duration_ms,
+  );
+  const winning_option_index = winningOptionIndex(
+    round.config_version.options,
+    round.result.winning_option_version_id,
   );
   const transitioned = await withSerializableRetry(async (tx) => {
     const updated = await tx.greedyRound.updateMany({
@@ -299,6 +314,7 @@ const startDrawing = async (round_id: string): Promise<void> => {
           round_id: round.id,
           drawing_started_at: drawing_started_at.toISOString(),
           result_reveal_at: result_reveal_at.toISOString(),
+          winning_option_index,
         },
       },
     });
@@ -311,7 +327,17 @@ const startDrawing = async (round_id: string): Promise<void> => {
 const revealResult = async (round_id: string): Promise<void> => {
   const round = await prisma.greedyRound.findUnique({
     where: { id: round_id },
-    include: { result: { include: { winning_option: true } } },
+    include: {
+      config_version: {
+        include: {
+          options: {
+            where: { is_enabled: true },
+            orderBy: { display_order: 'asc' },
+          },
+        },
+      },
+      result: { include: { winning_option: true } },
+    },
   });
   if (!round || round.status !== GreedyRoundStatus.drawing || !round.result || !round.result_reveal_at) return;
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
@@ -321,6 +347,10 @@ const revealResult = async (round_id: string): Promise<void> => {
   if (!database_now || database_now < round.result_reveal_at) return;
 
   const revealed_at = database_now;
+  const winning_option_index = winningOptionIndex(
+    round.config_version.options,
+    round.result.winning_option.id,
+  );
   const top_winners_by_round = await getGreedyTopWinnersByRound([
     {
       round_id: round.id,
@@ -342,6 +372,7 @@ const revealResult = async (round_id: string): Promise<void> => {
         event_type: 'greedy.round.result', socket_room: GREEDY_SOCKET_ROOM,
         payload: {
           round_id: round.id,
+          winning_option_index,
           winning_option: {
             id: round.result!.winning_option.id,
             code: round.result!.winning_option.code,

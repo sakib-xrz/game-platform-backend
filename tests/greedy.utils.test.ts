@@ -7,6 +7,7 @@ import {
   calculatePayout,
   compareGreedyWinnerRankings,
   isRetryableTransactionError,
+  winningOptionIndex,
 } from '@/modules/greedy/greedy.utils';
 import { secureRandomBigIntBelow } from '@/utils/crypto-rng';
 
@@ -32,6 +33,25 @@ describe('Greedy utility rules', () => {
 
   it('calculates stake-inclusive integer payout', () => {
     expect(calculatePayout(500n, 10n, 1n)).toBe(5000n);
+  });
+
+  it('maps the winning option to the 0-based display_order index', () => {
+    const options = [
+      { id: 'hot-dog', code: 'HOT_DOG' },
+      { id: 'kebab', code: 'KEBAB' },
+      { id: 'ham', code: 'HAM' },
+      { id: 'steak', code: 'STEAK' },
+      { id: 'carrot', code: 'CARROT' },
+      { id: 'corn', code: 'CORN' },
+      { id: 'cabbage', code: 'CABBAGE' },
+      { id: 'tomato', code: 'TOMATO' },
+    ];
+
+    expect(winningOptionIndex(options, 'hot-dog')).toBe(0);
+    expect(winningOptionIndex(options, 'carrot')).toBe(4);
+    expect(() => winningOptionIndex(options, 'missing')).toThrow(
+      'Winning option is not present in the enabled option list',
+    );
   });
 
   it('uses floor semantics for fractional atomic-unit payout', () => {
