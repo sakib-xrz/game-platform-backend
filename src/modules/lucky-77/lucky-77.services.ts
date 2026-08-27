@@ -332,6 +332,18 @@ const getSnapshot = async (user_id: string) => {
       select: publicResultSelect,
     });
   }
+  // During drawing the winner is still hidden, but clients need the stop slot
+  // so the wheel can decelerate onto the same segment the server will reveal.
+  if (
+    current_round &&
+    current_round.status === Lucky77RoundStatus.drawing &&
+    !current_result
+  ) {
+    current_result = await prisma.lucky77RoundResult.findUnique({
+      where: { round_id: current_round.id },
+      select: publicResultSelect,
+    });
+  }
 
   const bettors: Lucky77BettorAggregate[] = current_round
     ? await (async () => {
@@ -425,6 +437,12 @@ const getSnapshot = async (user_id: string) => {
           options: public_current_config!.options,
           chip_values: public_current_config!.chip_values,
           bettors,
+          winning_slot_index:
+            current_result &&
+            (current_round.status === Lucky77RoundStatus.drawing ||
+              result_is_public)
+              ? current_result.winning_slot_index
+              : null,
           result: result_is_public
             ? decorateResult(
                 current_result,

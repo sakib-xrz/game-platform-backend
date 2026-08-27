@@ -177,7 +177,7 @@ Contains `round_id` and `locked_at`.
 
 ### `lucky_77.round.drawing`
 
-Contains `round_id`, `drawing_started_at`, and `result_reveal_at`. The winning result is intentionally absent.
+Contains `round_id`, `drawing_started_at`, `result_reveal_at`, and `winning_slot_index`. The stop slot is published so clients can decelerate the wheel onto the correct segment; the winning option identity remains withheld until reveal.
 
 ### `lucky_77.round.result`
 

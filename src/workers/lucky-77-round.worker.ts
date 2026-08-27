@@ -281,9 +281,11 @@ const generateResult = async (round_id: string): Promise<void> => {
 const startDrawing = async (round_id: string): Promise<void> => {
   const round = await prisma.lucky77Round.findUnique({
     where: { id: round_id },
-    include: { config_version: true },
+    include: { config_version: true, result: true },
   });
-  if (!round || round.status !== Lucky77RoundStatus.result_ready) return;
+  if (!round || round.status !== Lucky77RoundStatus.result_ready || !round.result) {
+    return;
+  }
 
   const database_now_rows = await prisma.$queryRaw<Array<{ database_now: Date }>>(
     Prisma.sql`SELECT CURRENT_TIMESTAMP AS database_now`,
@@ -294,6 +296,9 @@ const startDrawing = async (round_id: string): Promise<void> => {
   const result_reveal_at = new Date(
     drawing_started_at.getTime() + round.config_version.drawing_duration_ms,
   );
+  // Clients need the stop index during drawing so the wheel can decelerate
+  // onto the same slot the server will reveal. The winning option stays hidden.
+  const winning_slot_index = round.result.winning_slot_index;
   const transitioned = await withSerializableRetry(async (tx) => {
     const updated = await tx.lucky77Round.updateMany({
       where: { id: round.id, status: Lucky77RoundStatus.result_ready },
@@ -315,6 +320,7 @@ const startDrawing = async (round_id: string): Promise<void> => {
           round_id: round.id,
           drawing_started_at: drawing_started_at.toISOString(),
           result_reveal_at: result_reveal_at.toISOString(),
+          winning_slot_index,
         },
       },
     });
