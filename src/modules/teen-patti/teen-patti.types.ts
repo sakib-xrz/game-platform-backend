@@ -29,6 +29,14 @@ export type TeenPattiPreviewCard = {
   card: string;
 };
 
+export type TeenPattiTopWinner = TeenPattiPublicIdentity & {
+  rank: number;
+  winning_stake: string;
+  bet_count: number;
+  total_payout: string;
+  first_bet_at: string;
+};
+
 export type TeenPattiBetPlacedPayload = TeenPattiPublicIdentity & {
   bet_id: string;
   round_id: string;
