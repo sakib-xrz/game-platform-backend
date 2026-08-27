@@ -11,9 +11,9 @@ type ApprovalViewer = { id: string; role: AdminRole };
 const approvalPayloadHash = (payload: Prisma.JsonValue): string => sha256(canonicalJson(payload));
 
 export const approvalEligibleRoles = (action_type: string): AdminRole[] => {
-  if (action_type.startsWith('wallet.')) return [AdminRole.super_admin, AdminRole.finance_operator];
-  if (action_type.startsWith('greedy.') || action_type.startsWith('teen_patti.') || action_type.startsWith('lucky_77.') || action_type.startsWith('greedy_classic.') || action_type.startsWith('game.')) return [AdminRole.super_admin, AdminRole.game_operator];
-  return [AdminRole.super_admin];
+  if (action_type.startsWith('wallet.')) return [AdminRole.dev_super_admin, AdminRole.super_admin, AdminRole.finance_operator];
+  if (action_type.startsWith('greedy.') || action_type.startsWith('teen_patti.') || action_type.startsWith('lucky_77.') || action_type.startsWith('greedy_classic.') || action_type.startsWith('game.')) return [AdminRole.dev_super_admin, AdminRole.game_operator];
+  return [AdminRole.dev_super_admin, AdminRole.super_admin];
 };
 
 export const canAdminApprove = (action_type: string, approver_role: AdminRole, requester_id: string, approver_id: string): boolean =>
@@ -87,7 +87,8 @@ export const listPendingApprovals = async (admin_user_id: string, page = 1, limi
 };
 
 const mayViewApproval = (approval: { requested_by_admin_id: string; action_type: string; decisions: Array<{ admin_user_id: string }> }, viewer: ApprovalViewer): boolean =>
-  viewer.role === AdminRole.super_admin
+  viewer.role === AdminRole.dev_super_admin
+  || viewer.role === AdminRole.super_admin
   || viewer.role === AdminRole.auditor
   || approval.requested_by_admin_id === viewer.id
   || approval.decisions.some((item) => item.admin_user_id === viewer.id)
@@ -117,7 +118,7 @@ export const listApprovals = async (admin_user_id: string, page = 1, limit = 20)
     'greedy_classic.round.cancel': true,
     'game.runtime.control': true,
   }).filter((action) => approvalEligibleRoles(action).includes(admin.role));
-  const where: Prisma.AdminApprovalRequestWhereInput = admin.role === AdminRole.super_admin || admin.role === AdminRole.auditor
+  const where: Prisma.AdminApprovalRequestWhereInput = admin.role === AdminRole.dev_super_admin || admin.role === AdminRole.super_admin || admin.role === AdminRole.auditor
     ? {}
     : { OR: [{ requested_by_admin_id: admin_user_id }, { decisions: { some: { admin_user_id } } }, { action_type: { in: actions } }] };
   const [items, total] = await prisma.$transaction([

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const email = z.string().trim().email().max(320).transform((value) => value.toLowerCase());
 const password = z.string().min(12).max(128);
-const role = z.enum(['super_admin', 'game_operator', 'finance_operator', 'support', 'auditor']);
+const role = z.enum(['dev_super_admin', 'super_admin', 'game_operator', 'finance_operator', 'support', 'auditor']);
 const status = z.enum(['active', 'locked', 'disabled']);
 
 export const loginSchema = z.object({ body: z.object({ email, password }) });

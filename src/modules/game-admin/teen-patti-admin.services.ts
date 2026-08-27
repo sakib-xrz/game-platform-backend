@@ -19,6 +19,7 @@ import {
 } from '@/modules/teen-patti/teen-patti.config';
 import type { CancelRoundBody, CreateTeenPattiConfigBody } from './game-admin.validation';
 import { createPendingApproval, markApprovalApplied, verifyApprovalPayloadHash } from '@/modules/admin/admin-approval.services';
+import { canManageGameAvailability } from '@/modules/admin/admin.permissions';
 import type { AdminAuditContext } from '@/modules/admin/admin.services';
 import { writeAdminAudit } from '@/modules/admin/admin.services';
 
@@ -156,8 +157,8 @@ const getRuntime = async () => {
 const resume = async (context: AdminAuditContext = {}) =>
   prisma.$transaction(async (tx) => {
     const game = await getGameOrThrow(tx);
-    if (game.status === GameStatus.disabled && context.actor_role !== AdminRole.super_admin) {
-      throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can resume a disabled game');
+    if (game.status === GameStatus.disabled && !canManageGameAvailability(context.actor_role)) {
+      throw new AppError(httpStatus.FORBIDDEN, 'Only a game admin can resume a disabled game');
     }
     const runtime = await tx.teenPattiRuntimeState.findUnique({ where: { game_id: game.id } });
     if (!runtime?.active_config_version_id) {

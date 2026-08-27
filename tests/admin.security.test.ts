@@ -28,10 +28,15 @@ describe('admin security primitives', () => {
     expect(hashSessionToken(first)).toBe(sha256(first));
   });
 
-  it('enforces the five-role permission boundary', () => {
+  it('enforces the role permission boundary', () => {
+    expect(hasAdminPermission(AdminRole.dev_super_admin, 'admin.manage')).toBe(true);
+    expect(hasAdminPermission(AdminRole.dev_super_admin, 'game.config.publish')).toBe(true);
     expect(hasAdminPermission(AdminRole.super_admin, 'admin.manage')).toBe(true);
+    expect(hasAdminPermission(AdminRole.super_admin, 'game.config.publish')).toBe(false);
+    expect(hasAdminPermission(AdminRole.super_admin, 'platform.app.manage')).toBe(true);
     expect(hasAdminPermission(AdminRole.game_operator, 'game.runtime.control')).toBe(true);
     expect(hasAdminPermission(AdminRole.game_operator, 'wallet.adjust.create')).toBe(false);
+    expect(hasAdminPermission(AdminRole.game_operator, 'admin.manage')).toBe(false);
     expect(hasAdminPermission(AdminRole.finance_operator, 'wallet.adjust.approve')).toBe(true);
     expect(hasAdminPermission(AdminRole.finance_operator, 'game.config.publish')).toBe(false);
     expect(hasAdminPermission(AdminRole.support, 'wallet.read')).toBe(true);
@@ -45,7 +50,8 @@ describe('admin security primitives', () => {
     expect(canAdminApprove('wallet.adjust', AdminRole.game_operator, 'requester', 'game')).toBe(false);
     expect(canAdminApprove('greedy.config.publish', AdminRole.game_operator, 'requester', 'game')).toBe(true);
     expect(canAdminApprove('greedy.config.publish', AdminRole.finance_operator, 'requester', 'finance')).toBe(false);
-    expect(canAdminApprove('greedy.config.publish', AdminRole.super_admin, 'same', 'same')).toBe(false);
+    expect(canAdminApprove('greedy.config.publish', AdminRole.dev_super_admin, 'same', 'same')).toBe(false);
+    expect(canAdminApprove('greedy.config.publish', AdminRole.super_admin, 'requester', 'finance')).toBe(false);
     expect(canAdminApprove('teen_patti.config.publish', AdminRole.game_operator, 'requester', 'game')).toBe(true);
     expect(canAdminApprove('teen_patti.config.publish', AdminRole.finance_operator, 'requester', 'finance')).toBe(false);
     expect(canAdminApprove('teen_patti.round.cancel', AdminRole.game_operator, 'requester', 'ops')).toBe(true);

@@ -552,45 +552,85 @@ const main = async (): Promise<void> => {
     },
   });
 
-  const admin_email = normalizeAdminEmail(
-    process.env.ADMIN_SEED_EMAIL || 'admin@example.com',
-  );
-  const admin_password = process.env.ADMIN_SEED_PASSWORD || 'AdminPassword123';
-  if (admin_password.length < 12 || admin_password.length > 128) {
-    throw new Error('ADMIN_SEED_PASSWORD must be between 12 and 128 characters');
+  const upsertSeedAdmin = async (input: {
+    email: string;
+    password: string;
+    display_name: string;
+    role: AdminRole;
+    min_password_length?: number;
+  }) => {
+    const min_length = input.min_password_length ?? 12;
+    if (input.password.length < min_length || input.password.length > 128) {
+      throw new Error(`${input.email} seed password must be between ${min_length} and 128 characters`);
+    }
+    const email = normalizeAdminEmail(input.email);
+    const password_hash = await hashAdminPassword(input.password);
+    const admin = await prisma.adminUser.upsert({
+      where: { email },
+      create: {
+        email,
+        display_name: input.display_name,
+        role: input.role,
+        status: AdminStatus.active,
+        password_hash,
+        force_password_change: false,
+        failed_login_count: 0,
+        locked_until: null,
+        password_changed_at: new Date(),
+      },
+      update: {
+        display_name: input.display_name,
+        role: input.role,
+        status: AdminStatus.active,
+        password_hash,
+        force_password_change: false,
+        failed_login_count: 0,
+        locked_until: null,
+        password_changed_at: new Date(),
+      },
+      select: { id: true, email: true, role: true },
+    });
+    await prisma.adminSession.updateMany({
+      where: { admin_user_id: admin.id, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
+    return admin;
+  };
+
+  const super_admin = await upsertSeedAdmin({
+    email: process.env.ADMIN_SEED_EMAIL || 'superadmin@example.com',
+    password: process.env.ADMIN_SEED_PASSWORD || 'SuperAdminPassword123',
+    display_name: 'Super Admin',
+    role: AdminRole.super_admin,
+  });
+
+  const dev_super_admin = await upsertSeedAdmin({
+    email: process.env.DEV_ADMIN_SEED_EMAIL || 'devadmin@example.com',
+    password: process.env.DEV_ADMIN_SEED_PASSWORD || 'dev123',
+    display_name: 'Dev Super Admin',
+    role: AdminRole.dev_super_admin,
+    min_password_length: 6,
+  });
+
+  const active_seed_emails = new Set([super_admin.email, dev_super_admin.email]);
+  const legacy_seed_emails = ['admin@example.com'];
+  for (const legacy_email of legacy_seed_emails) {
+    if (active_seed_emails.has(legacy_email)) continue;
+    const legacy_admin = await prisma.adminUser.findUnique({
+      where: { email: legacy_email },
+      select: { id: true, status: true },
+    });
+    if (!legacy_admin || legacy_admin.status === AdminStatus.disabled) continue;
+    await prisma.adminUser.update({
+      where: { id: legacy_admin.id },
+      data: { status: AdminStatus.disabled },
+    });
+    await prisma.adminSession.updateMany({
+      where: { admin_user_id: legacy_admin.id, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
   }
 
-  const password_hash = await hashAdminPassword(admin_password);
-  const admin = await prisma.adminUser.upsert({
-    where: { email: admin_email },
-    create: {
-      email: admin_email,
-      display_name: 'Platform Admin',
-      role: AdminRole.super_admin,
-      status: AdminStatus.active,
-      password_hash,
-      force_password_change: false,
-      failed_login_count: 0,
-      locked_until: null,
-      password_changed_at: new Date(),
-    },
-    update: {
-      display_name: 'Platform Admin',
-      role: AdminRole.super_admin,
-      status: AdminStatus.active,
-      password_hash,
-      force_password_change: false,
-      failed_login_count: 0,
-      locked_until: null,
-      password_changed_at: new Date(),
-    },
-    select: { id: true, email: true, role: true },
-  });
-
-  await prisma.adminSession.updateMany({
-    where: { admin_user_id: admin.id, revoked_at: null },
-    data: { revoked_at: new Date() },
-  });
   await prisma.adminPolicy.upsert({
     where: { code: 'default' },
     create: {},
@@ -722,7 +762,8 @@ const main = async (): Promise<void> => {
     lucky_77_config_version: lucky_77_config.version,
     greedy_classic_config_version: greedy_classic_config.version,
     runtime_status: 'stopped',
-    admin: admin.email,
+    admin: super_admin.email,
+    dev_super_admin: dev_super_admin.email,
     game_bots: seeded_bot_count,
   });
 };

@@ -8,7 +8,7 @@ import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
 import { sha256, stableRequestHash } from '@/utils/hash';
 import { createSessionToken, hashAdminPassword, hashSessionToken, normalizeAdminEmail, verifyAdminPassword } from './admin.crypto';
-import type { AdminPermission } from './admin.permissions';
+import { hasAdminPermission } from './admin.permissions';
 import type { AuthenticatedAdmin } from './admin.types';
 
 export const ADMIN_SESSION_IDLE_MS = 30 * 60 * 1000;
@@ -92,6 +92,42 @@ export const ensureStrongPassword = (password: string): void => {
 
 const activeSuperAdminCount = async (tx: Prisma.TransactionClient = prisma): Promise<number> =>
   tx.adminUser.count({ where: { role: AdminRole.super_admin, status: AdminStatus.active } });
+
+const activeDevSuperAdminCount = async (tx: Prisma.TransactionClient = prisma): Promise<number> =>
+  tx.adminUser.count({ where: { role: AdminRole.dev_super_admin, status: AdminStatus.active } });
+
+const assertAdminManagePermission = (actor: AuthenticatedAdmin): void => {
+  if (!hasAdminPermission(actor.role, 'admin.manage')) {
+    throw new AppError(httpStatus.FORBIDDEN, 'You do not have permission to manage admin accounts');
+  }
+};
+
+const assignableRolesFor = (actor: AuthenticatedAdmin): AdminRole[] => {
+  if (actor.role === AdminRole.dev_super_admin) {
+    return [
+      AdminRole.dev_super_admin,
+      AdminRole.super_admin,
+      AdminRole.game_operator,
+      AdminRole.finance_operator,
+      AdminRole.support,
+      AdminRole.auditor,
+    ];
+  }
+  if (actor.role === AdminRole.super_admin) return [AdminRole.game_operator];
+  return [];
+};
+
+const assertAssignableRole = (actor: AuthenticatedAdmin, role: AdminRole): void => {
+  if (!assignableRolesFor(actor).includes(role)) {
+    throw new AppError(httpStatus.FORBIDDEN, 'You cannot assign that admin role');
+  }
+};
+
+const assertCanManageTarget = (actor: AuthenticatedAdmin, target: AuthenticatedAdmin): void => {
+  if (actor.role === AdminRole.dev_super_admin) return;
+  if (actor.role === AdminRole.super_admin && target.role === AdminRole.game_operator) return;
+  throw new AppError(httpStatus.FORBIDDEN, 'You cannot manage this admin account');
+};
 
 export type AdminRequestContext = AdminAuditContext & { user_agent?: string };
 
@@ -222,26 +258,67 @@ const changePassword = async (
 export type CreateAdminInput = { email: string; display_name: string; role: AdminRole; password: string; force_password_change?: boolean };
 
 const createAdmin = async (actor: AuthenticatedAdmin, input: CreateAdminInput, context: AdminRequestContext) => {
-  if (actor.role !== AdminRole.super_admin) throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can manage admins');
+  assertAdminManagePermission(actor);
+  assertAssignableRole(actor, input.role);
   ensureStrongPassword(input.password);
   const password_hash = await hashAdminPassword(input.password);
   const email = normalizeAdminEmail(input.email);
   return prisma.$transaction(async (tx) => {
-    const created = await tx.adminUser.create({ data: { email, display_name: input.display_name.trim(), role: input.role, password_hash, force_password_change: input.force_password_change ?? true }, select: adminSelect });
-    await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.created', entity_type: 'admin_user', entity_id: created.id, new_values: { email, role: input.role } });
-    return toAdmin(created);
+    const existing = await tx.adminUser.findUnique({ where: { email }, select: adminSelect });
+    if (existing) {
+      if (existing.status === AdminStatus.active) {
+        throw new AppError(httpStatus.CONFLICT, 'An admin with this email already exists');
+      }
+      if (actor.role === AdminRole.super_admin && existing.role !== AdminRole.game_operator) {
+        throw new AppError(httpStatus.CONFLICT, 'This email is already registered to another admin account. Use a different email.');
+      }
+      assertCanManageTarget(actor, existing);
+      if (input.role !== existing.role) assertAssignableRole(actor, input.role);
+      const updated = await tx.adminUser.update({
+        where: { id: existing.id },
+        data: {
+          display_name: input.display_name.trim(),
+          role: input.role,
+          status: AdminStatus.active,
+          password_hash,
+          force_password_change: input.force_password_change ?? true,
+          failed_login_count: 0,
+          locked_until: null,
+          password_changed_at: new Date(),
+        },
+        select: adminSelect,
+      });
+      await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.reactivated', entity_type: 'admin_user', entity_id: updated.id, old_values: { email, role: existing.role, status: existing.status }, new_values: { email, role: input.role, status: AdminStatus.active } });
+      return toAdmin(updated);
+    }
+
+    try {
+      const created = await tx.adminUser.create({ data: { email, display_name: input.display_name.trim(), role: input.role, password_hash, force_password_change: input.force_password_change ?? true }, select: adminSelect });
+      await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.created', entity_type: 'admin_user', entity_id: created.id, new_values: { email, role: input.role } });
+      return toAdmin(created);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new AppError(httpStatus.CONFLICT, 'An admin with this email already exists');
+      }
+      throw error;
+    }
   });
 };
 
 const listAdmins = async () => prisma.adminUser.findMany({ select: adminListSelect, orderBy: [{ status: 'asc' }, { email: 'asc' }] });
 
 const updateAdmin = async (actor: AuthenticatedAdmin, target_id: string, input: { display_name?: string; role?: AdminRole; status?: AdminStatus; force_password_change?: boolean }, context: AdminRequestContext) => {
-  if (actor.role !== AdminRole.super_admin) throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can manage admins');
+  assertAdminManagePermission(actor);
   return prisma.$transaction(async (tx) => {
     const target = await tx.adminUser.findUnique({ where: { id: target_id }, select: adminSelect });
     if (!target) throw new AppError(httpStatus.NOT_FOUND, 'Admin user not found');
+    assertCanManageTarget(actor, target);
     const next_role = input.role ?? target.role;
     const next_status = input.status ?? target.status;
+    if (input.role) assertAssignableRole(actor, input.role);
+    if (target.role === AdminRole.dev_super_admin && target.status === AdminStatus.active && (next_role !== AdminRole.dev_super_admin || next_status !== AdminStatus.active) && await activeDevSuperAdminCount(tx) <= 1) {
+      throw new AppError(httpStatus.CONFLICT, 'The last active dev super admin cannot be disabled or demoted');
+    }
     if (target.role === AdminRole.super_admin && target.status === AdminStatus.active && (next_role !== AdminRole.super_admin || next_status !== AdminStatus.active) && await activeSuperAdminCount(tx) <= 1) {
       throw new AppError(httpStatus.CONFLICT, 'The last active super admin cannot be disabled or demoted');
     }
@@ -253,18 +330,24 @@ const updateAdmin = async (actor: AuthenticatedAdmin, target_id: string, input: 
 };
 
 const revokeAdminSessions = async (actor: AuthenticatedAdmin, target_id: string, context: AdminRequestContext): Promise<void> => {
-  if (actor.role !== AdminRole.super_admin) throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can manage sessions');
+  assertAdminManagePermission(actor);
   await prisma.$transaction(async (tx) => {
+    const target = await tx.adminUser.findUnique({ where: { id: target_id }, select: adminSelect });
+    if (!target) throw new AppError(httpStatus.NOT_FOUND, 'Admin user not found');
+    assertCanManageTarget(actor, target);
     await tx.adminSession.updateMany({ where: { admin_user_id: target_id, revoked_at: null }, data: { revoked_at: new Date() } });
     await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.sessions_revoked', entity_type: 'admin_user', entity_id: target_id });
   });
 };
 
 const resetPassword = async (actor: AuthenticatedAdmin, target_id: string, password: string, context: AdminRequestContext): Promise<AuthenticatedAdmin> => {
-  if (actor.role !== AdminRole.super_admin) throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can reset passwords');
+  assertAdminManagePermission(actor);
   ensureStrongPassword(password);
   const password_hash = await hashAdminPassword(password);
   return prisma.$transaction(async (tx) => {
+    const target = await tx.adminUser.findUnique({ where: { id: target_id }, select: adminSelect });
+    if (!target) throw new AppError(httpStatus.NOT_FOUND, 'Admin user not found');
+    assertCanManageTarget(actor, target);
     const updated = await tx.adminUser.update({ where: { id: target_id }, data: { password_hash, force_password_change: true, password_changed_at: new Date(), failed_login_count: 0, locked_until: null, status: AdminStatus.active }, select: adminSelect });
     await tx.adminSession.updateMany({ where: { admin_user_id: target_id, revoked_at: null }, data: { revoked_at: new Date() } });
     await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.password_reset', entity_type: 'admin_user', entity_id: target_id });
@@ -275,7 +358,9 @@ const resetPassword = async (actor: AuthenticatedAdmin, target_id: string, passw
 const getPolicy = async () => prisma.adminPolicy.upsert({ where: { code: 'default' }, create: {}, update: {} });
 
 const updatePolicy = async (actor: AuthenticatedAdmin, threshold: string, expiry_minutes: number, context: AdminRequestContext) => {
-  if (actor.role !== AdminRole.super_admin) throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can manage policy');
+  if (actor.role !== AdminRole.dev_super_admin && actor.role !== AdminRole.super_admin) {
+    throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can manage policy');
+  }
   const wallet_adjustment_threshold = BigInt(threshold);
   if (wallet_adjustment_threshold < 0n) throw new AppError(httpStatus.BAD_REQUEST, 'Approval threshold cannot be negative');
   return prisma.$transaction(async (tx) => {
