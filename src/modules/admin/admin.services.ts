@@ -27,6 +27,14 @@ const adminSelect = {
   last_login_at: true,
   created_at: true,
   updated_at: true,
+  platform_app_id: true,
+  platform_app: {
+    select: {
+      id: true,
+      app_name: true,
+      package_name: true,
+    },
+  },
 } satisfies Prisma.AdminUserSelect;
 
 const toAdmin = (admin: Prisma.AdminUserGetPayload<{ select: typeof adminSelect }>): AuthenticatedAdmin => ({
@@ -36,6 +44,12 @@ const toAdmin = (admin: Prisma.AdminUserGetPayload<{ select: typeof adminSelect 
   role: admin.role,
   status: admin.status,
   force_password_change: admin.force_password_change,
+  platform_app_id: admin.platform_app_id ?? null,
+  platform_app: admin.platform_app ? {
+    id: admin.platform_app.id,
+    app_name: admin.platform_app.app_name,
+    package_name: admin.platform_app.package_name,
+  } : null,
 });
 
 const adminListSelect = {
@@ -255,15 +269,36 @@ const changePassword = async (
   });
 };
 
-export type CreateAdminInput = { email: string; display_name: string; role: AdminRole; password: string; force_password_change?: boolean };
+export type CreateAdminInput = {
+  email: string;
+  display_name: string;
+  platform_app_id: string;
+  role?: AdminRole;
+  password: string;
+  force_password_change?: boolean;
+};
 
 const createAdmin = async (actor: AuthenticatedAdmin, input: CreateAdminInput, context: AdminRequestContext) => {
   assertAdminManagePermission(actor);
-  assertAssignableRole(actor, input.role);
+  const assignedRole = input.role ?? AdminRole.game_operator;
+  assertAssignableRole(actor, assignedRole);
   ensureStrongPassword(input.password);
   const password_hash = await hashAdminPassword(input.password);
   const email = normalizeAdminEmail(input.email);
+
+  if (!input.platform_app_id?.trim()) {
+    throw new AppError(httpStatus.BAD_REQUEST, 'Platform app is mandatory');
+  }
+
   return prisma.$transaction(async (tx) => {
+    const platformApp = await tx.platformApp.findUnique({
+      where: { id: input.platform_app_id.trim() },
+      select: { id: true, app_name: true, package_name: true, status: true },
+    });
+    if (!platformApp) {
+      throw new AppError(httpStatus.BAD_REQUEST, 'Selected platform app does not exist');
+    }
+
     const existing = await tx.adminUser.findUnique({ where: { email }, select: adminSelect });
     if (existing) {
       if (existing.status === AdminStatus.active) {
@@ -273,12 +308,13 @@ const createAdmin = async (actor: AuthenticatedAdmin, input: CreateAdminInput, c
         throw new AppError(httpStatus.CONFLICT, 'This email is already registered to another admin account. Use a different email.');
       }
       assertCanManageTarget(actor, existing);
-      if (input.role !== existing.role) assertAssignableRole(actor, input.role);
+      if (assignedRole !== existing.role) assertAssignableRole(actor, assignedRole);
       const updated = await tx.adminUser.update({
         where: { id: existing.id },
         data: {
           display_name: input.display_name.trim(),
-          role: input.role,
+          role: assignedRole,
+          platform_app_id: platformApp.id,
           status: AdminStatus.active,
           password_hash,
           force_password_change: input.force_password_change ?? true,
@@ -288,13 +324,23 @@ const createAdmin = async (actor: AuthenticatedAdmin, input: CreateAdminInput, c
         },
         select: adminSelect,
       });
-      await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.reactivated', entity_type: 'admin_user', entity_id: updated.id, old_values: { email, role: existing.role, status: existing.status }, new_values: { email, role: input.role, status: AdminStatus.active } });
+      await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.reactivated', entity_type: 'admin_user', entity_id: updated.id, old_values: { email, role: existing.role, status: existing.status }, new_values: { email, role: assignedRole, platform_app_id: platformApp.id, status: AdminStatus.active } });
       return toAdmin(updated);
     }
 
     try {
-      const created = await tx.adminUser.create({ data: { email, display_name: input.display_name.trim(), role: input.role, password_hash, force_password_change: input.force_password_change ?? true }, select: adminSelect });
-      await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.created', entity_type: 'admin_user', entity_id: created.id, new_values: { email, role: input.role } });
+      const created = await tx.adminUser.create({
+        data: {
+          email,
+          display_name: input.display_name.trim(),
+          role: assignedRole,
+          platform_app_id: platformApp.id,
+          password_hash,
+          force_password_change: input.force_password_change ?? true,
+        },
+        select: adminSelect,
+      });
+      await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.created', entity_type: 'admin_user', entity_id: created.id, new_values: { email, role: assignedRole, platform_app_id: platformApp.id } });
       return toAdmin(created);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -307,7 +353,7 @@ const createAdmin = async (actor: AuthenticatedAdmin, input: CreateAdminInput, c
 
 const listAdmins = async () => prisma.adminUser.findMany({ select: adminListSelect, orderBy: [{ status: 'asc' }, { email: 'asc' }] });
 
-const updateAdmin = async (actor: AuthenticatedAdmin, target_id: string, input: { display_name?: string; role?: AdminRole; status?: AdminStatus; force_password_change?: boolean }, context: AdminRequestContext) => {
+const updateAdmin = async (actor: AuthenticatedAdmin, target_id: string, input: { display_name?: string; role?: AdminRole; status?: AdminStatus; platform_app_id?: string | null; force_password_change?: boolean }, context: AdminRequestContext) => {
   assertAdminManagePermission(actor);
   return prisma.$transaction(async (tx) => {
     const target = await tx.adminUser.findUnique({ where: { id: target_id }, select: adminSelect });
@@ -315,6 +361,7 @@ const updateAdmin = async (actor: AuthenticatedAdmin, target_id: string, input: 
     assertCanManageTarget(actor, target);
     const next_role = input.role ?? target.role;
     const next_status = input.status ?? target.status;
+    const next_platform_app_id = input.platform_app_id !== undefined ? input.platform_app_id : target.platform_app_id;
     if (input.role) assertAssignableRole(actor, input.role);
     if (target.role === AdminRole.dev_super_admin && target.status === AdminStatus.active && (next_role !== AdminRole.dev_super_admin || next_status !== AdminStatus.active) && await activeDevSuperAdminCount(tx) <= 1) {
       throw new AppError(httpStatus.CONFLICT, 'The last active dev super admin cannot be disabled or demoted');
@@ -322,9 +369,19 @@ const updateAdmin = async (actor: AuthenticatedAdmin, target_id: string, input: 
     if (target.role === AdminRole.super_admin && target.status === AdminStatus.active && (next_role !== AdminRole.super_admin || next_status !== AdminStatus.active) && await activeSuperAdminCount(tx) <= 1) {
       throw new AppError(httpStatus.CONFLICT, 'The last active super admin cannot be disabled or demoted');
     }
-    const updated = await tx.adminUser.update({ where: { id: target_id }, data: { display_name: input.display_name?.trim(), role: next_role, status: next_status, force_password_change: input.force_password_change }, select: adminSelect });
+    const updated = await tx.adminUser.update({
+      where: { id: target_id },
+      data: {
+        display_name: input.display_name?.trim(),
+        role: next_role,
+        status: next_status,
+        platform_app_id: next_platform_app_id,
+        force_password_change: input.force_password_change,
+      },
+      select: adminSelect,
+    });
     if (next_status !== AdminStatus.active || next_role !== target.role) await tx.adminSession.updateMany({ where: { admin_user_id: target_id, revoked_at: null }, data: { revoked_at: new Date() } });
-    await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.updated', entity_type: 'admin_user', entity_id: target_id, old_values: { role: target.role, status: target.status, display_name: target.display_name }, new_values: { role: updated.role, status: updated.status, display_name: updated.display_name } });
+    await writeAdminAudit(tx, { ...context, admin_user_id: actor.id, actor_role: actor.role, outcome: 'success' }, { action: 'admin.user.updated', entity_type: 'admin_user', entity_id: target_id, old_values: { role: target.role, status: target.status, display_name: target.display_name, platform_app_id: target.platform_app_id }, new_values: { role: updated.role, status: updated.status, display_name: updated.display_name, platform_app_id: updated.platform_app_id } });
     return toAdmin(updated);
   });
 };

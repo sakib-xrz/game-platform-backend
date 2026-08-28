@@ -10,9 +10,10 @@ export const changePasswordSchema = z.object({ body: z.object({ current_password
 export const createAdminSchema = z.object({
   body: z.object({
     email,
-    display_name: z.string().trim().min(1).max(120),
-    role,
+    display_name: z.string().trim().min(1, 'Display name is required').max(120),
+    platform_app_id: z.string().trim().min(1, 'Platform app is required'),
     password,
+    role: role.optional().default('game_operator'),
     force_password_change: z.boolean().optional(),
   }),
 });
@@ -22,6 +23,7 @@ export const updateAdminSchema = z.object({
     display_name: z.string().trim().min(1).max(120).optional(),
     role: role.optional(),
     status: status.optional(),
+    platform_app_id: z.string().trim().min(1).optional().nullable(),
     force_password_change: z.boolean().optional(),
   }).refine((value) => Object.keys(value).length > 0, 'At least one field is required'),
 });
