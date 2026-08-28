@@ -73,7 +73,9 @@ const seededShuffle = <T>(items: readonly T[], seed: number): T[] => {
   for (let i = result.length - 1; i > 0; i -= 1) {
     state = (Math.imul(1_664_525, state) + 1_013_904_223) >>> 0;
     const j = state % (i + 1);
-    [result[i], result[j]] = [result[j], result[i]];
+    const temp = result[i]!;
+    result[i] = result[j]!;
+    result[j] = temp;
   }
   return result;
 };
