@@ -23,6 +23,7 @@ import type { CreateLucky77ConfigBody } from './game-admin.validation';
 import { resolveLucky77OptionAssets } from './lucky-77-admin.services';
 import type { OpsAuditLogQuery, OpsMetricsQuery, OpsRoundBetsQuery, OpsRoundListQuery } from './lucky-77-admin-ops.validation';
 import type { AdminAuditContext } from '@/modules/admin/admin.services';
+import { canManageGameAvailability, canViewGameEntropy } from '@/modules/admin/admin.permissions';
 import { writeAdminAudit } from '@/modules/admin/admin.services';
 
 const WORKER_LEASE_KEY = 'game-worker:lucky-77';
@@ -145,7 +146,7 @@ const cloneConfig = async (config_id: string, context: AdminAuditContext = {}) =
     return draft;
   });
 
-const canViewEntropy = (role?: AdminRole) => role === AdminRole.super_admin || role === AdminRole.auditor;
+const canViewEntropy = canViewGameEntropy;
 
 const stripEntropy = <T extends { result?: { entropy_digest?: string | null } | null }>(item: T, role?: AdminRole): T => {
   if (canViewEntropy(role)) return item;
@@ -406,7 +407,7 @@ const setAvailability = async (status: GameStatus, context: AdminAuditContext = 
     const game = await getGameOrThrow(tx);
     const runtime = await tx.lucky77RuntimeState.findUnique({ where: { game_id: game.id } });
     if (!runtime) throw new AppError(httpStatus.CONFLICT, 'Lucky 77 runtime is not initialized');
-    if ((status === GameStatus.disabled || game.status === GameStatus.disabled) && context.actor_role !== AdminRole.super_admin) throw new AppError(httpStatus.FORBIDDEN, 'Only a super admin can transition into or out of the disabled state');
+    if ((status === GameStatus.disabled || game.status === GameStatus.disabled) && !canManageGameAvailability(context.actor_role)) throw new AppError(httpStatus.FORBIDDEN, 'Only a game admin can transition into or out of the disabled state');
     if (status === GameStatus.disabled && runtime.current_round_id) {
       throw new AppError(httpStatus.CONFLICT, 'The game can only be disabled when no round is active');
     }

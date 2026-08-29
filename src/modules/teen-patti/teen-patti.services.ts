@@ -33,7 +33,12 @@ import {
 import type {
   BetResponse,
   TeenPattiBettorAggregate,
+  TeenPattiTopWinner,
 } from './teen-patti.types';
+import {
+  getTeenPattiTopWinnersByRound,
+  type TeenPattiLeaderboardTarget,
+} from './teen-patti.leaderboard';
 import type { PlaceBetBody } from './teen-patti.validation';
 import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
 import { randomUUID } from 'node:crypto';
@@ -103,12 +108,26 @@ const publicResultSelect = {
   winning_option: { select: publicOptionSelect },
 } satisfies Prisma.TeenPattiRoundResultSelect;
 
-const decoratePublicResult = <T extends { audit_hash: string }>(
+type ResultWithWinningOption = {
+  round_id: string;
+  audit_hash: string;
+  winning_option: { id: string };
+};
+
+const toLeaderboardTarget = (
+  result: ResultWithWinningOption,
+): TeenPattiLeaderboardTarget => ({
+  round_id: result.round_id,
+  winning_option_id: result.winning_option.id,
+});
+
+const decoratePublicResult = <T extends ResultWithWinningOption>(
   result: T | null,
+  top_winners: TeenPattiTopWinner[] = [],
 ) => {
   if (!result) return null;
   const { audit_hash, ...public_result } = result;
-  return { ...public_result, result_commitment: audit_hash };
+  return { ...public_result, result_commitment: audit_hash, top_winners };
 };
 
 const requestHash = (payload: PlaceBetBody): string =>
@@ -400,6 +419,18 @@ const getSnapshot = async (user_id: string) => {
       ? buildTeenPattiPreview(current_result)
       : { preview_cards: [], result_commitment: null };
 
+  const leaderboard_targets: TeenPattiLeaderboardTarget[] = [
+    ...(result_is_public && current_result
+      ? [toLeaderboardTarget(current_result)]
+      : []),
+    ...history.flatMap((round) =>
+      round.result ? [toLeaderboardTarget(round.result)] : [],
+    ),
+  ];
+  const top_winners_by_round = await getTeenPattiTopWinnersByRound(
+    leaderboard_targets,
+  );
+
   const player_identity = await resolveGameIdentity(user_id);
 
   return {
@@ -447,7 +478,10 @@ const getSnapshot = async (user_id: string) => {
           preview_cards: preview.preview_cards,
           result_commitment: preview.result_commitment,
           result: result_is_public
-            ? decoratePublicResult(current_result)
+            ? decoratePublicResult(
+                current_result,
+                top_winners_by_round.get(current_round.id) ?? [],
+              )
             : null,
         }
       : null,
@@ -461,7 +495,10 @@ const getSnapshot = async (user_id: string) => {
       total_payout_amount: (
         history_payout_totals.get(round.id) ?? 0n
       ).toString(),
-      result: decoratePublicResult(round.result),
+      result: decoratePublicResult(
+        round.result,
+        top_winners_by_round.get(round.id) ?? [],
+      ),
     })),
   };
 };
@@ -933,10 +970,18 @@ const getRoundHistory = async (page = 1, limit = 20) => {
     }),
     prisma.teenPattiRound.count({ where }),
   ]);
+  const top_winners_by_round = await getTeenPattiTopWinnersByRound(
+    items.flatMap((item) =>
+      item.result ? [toLeaderboardTarget(item.result)] : [],
+    ),
+  );
   return {
     items: items.map((round) => ({
       ...round,
-      result: decoratePublicResult(round.result),
+      result: decoratePublicResult(
+        round.result,
+        top_winners_by_round.get(round.id) ?? [],
+      ),
     })),
     total,
     ...pagination,
@@ -974,11 +1019,23 @@ const getRound = async (round_id: string) => {
     ? buildTeenPattiPreview(round.result)
     : { preview_cards: [], result_commitment: null };
 
+  const top_winners_by_round =
+    result_is_public && round.result
+      ? await getTeenPattiTopWinnersByRound([
+          toLeaderboardTarget(round.result),
+        ])
+      : new Map<string, TeenPattiTopWinner[]>();
+
   return {
     ...round,
     preview_cards: preview.preview_cards,
     result_commitment: preview.result_commitment,
-    result: result_is_public ? decoratePublicResult(round.result) : null,
+    result: result_is_public
+      ? decoratePublicResult(
+          round.result,
+          top_winners_by_round.get(round.id) ?? [],
+        )
+      : null,
   };
 };
 

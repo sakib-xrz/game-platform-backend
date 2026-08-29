@@ -28,6 +28,7 @@ import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-o
 import { loadTeenPattiRoundBets } from '@/modules/game-bot/biased-round';
 import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
 import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
+import { getTeenPattiTopWinnersByRound } from '@/modules/teen-patti/teen-patti.leaderboard';
 
 const SETTLEMENT_BATCH_USERS = 50;
 const REFUND_BATCH_USERS = 50;
@@ -564,6 +565,12 @@ const revealResult = async (round_id: string): Promise<string[] | null> => {
   if (!round || round.database_now < round.result_reveal_at) return null;
 
   const revealed_at = round.database_now;
+  const top_winners_by_round = await getTeenPattiTopWinnersByRound([
+    {
+      round_id: round.id,
+      winning_option_id: round.winning_option_id,
+    },
+  ]);
   const revealed = await withSerializableRetry(async (tx) => {
     const updated = await tx.teenPattiRound.updateMany({
       where: { id: round.id, status: TeenPattiRoundStatus.drawing },
@@ -594,6 +601,7 @@ const revealResult = async (round_id: string): Promise<string[] | null> => {
           generated_at: round.generated_at.toISOString(),
           result_commitment: round.audit_hash,
           revealed_at: revealed_at.toISOString(),
+          top_winners: top_winners_by_round.get(round.id) ?? [],
         },
       },
     });

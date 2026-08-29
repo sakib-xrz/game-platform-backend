@@ -173,6 +173,7 @@ enum AuditActorType {
 }
 
 enum AdminRole {
+  dev_super_admin
   super_admin
   game_operator
   finance_operator
@@ -1372,6 +1373,7 @@ model AdminUser {
   password_changed_at   DateTime?
   created_at            DateTime    @default(now())
   updated_at            DateTime    @updatedAt
+  platform_app_id       String?
 
   sessions            AdminSession[]
   approval_requests   AdminApprovalRequest[] @relation("approval_requester")
@@ -1382,9 +1384,11 @@ model AdminUser {
   idempotency_records AdminIdempotencyRecord[]
   acknowledged_alerts OpsAlert[] @relation("alert_acknowledger")
   resolved_alerts     OpsAlert[] @relation("alert_resolver")
-  platform_apps       PlatformApp[]
+  platform_apps       PlatformApp[] @relation("created_platform_apps")
+  platform_app        PlatformApp? @relation("admin_assigned_app", fields: [platform_app_id], references: [id], onDelete: SetNull)
 
   @@index([role, status])
+  @@index([platform_app_id])
   @@map("admin_users")
 }
 
@@ -1547,7 +1551,8 @@ model PlatformApp {
   created_at               DateTime          @default(now())
   updated_at               DateTime          @updatedAt
 
-  created_by AdminUser? @relation(fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+  created_by AdminUser? @relation("created_platform_apps", fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+  assigned_admins AdminUser[] @relation("admin_assigned_app")
   platform_users PlatformUser[]
   platform_coin_deposits PlatformCoinDeposit[]
   platform_coin_withdrawals PlatformCoinWithdrawal[]
