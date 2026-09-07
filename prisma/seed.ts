@@ -606,10 +606,9 @@ const main = async (): Promise<void> => {
 
   const dev_super_admin = await upsertSeedAdmin({
     email: process.env.DEV_ADMIN_SEED_EMAIL || 'devadmin@example.com',
-    password: process.env.DEV_ADMIN_SEED_PASSWORD || 'dev123',
+    password: process.env.DEV_ADMIN_SEED_PASSWORD || 'DevAdmin12345',
     display_name: 'Dev Super Admin',
     role: AdminRole.dev_super_admin,
-    min_password_length: 6,
   });
 
   const active_seed_emails = new Set([super_admin.email, dev_super_admin.email]);
