@@ -8,6 +8,7 @@ import { GameAdminRoutes } from '@/modules/game-admin/game-admin.routes';
 import { PlatformAppRoutes } from '@/modules/platform-app/platform-app.routes';
 import { PlatformUserRoutes } from '@/modules/platform-user/platform-user.routes';
 import { PlatformIntegrationRoutes } from '@/modules/platform-integration/platform-integration.routes';
+import { AnalyticsRoutes } from '@/modules/analytics/analytics.routes';
 import AdminRoutes from '@/modules/admin/admin.routes';
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
@@ -44,6 +45,7 @@ router.use('/admin/wallets', WalletAdminRoutes);
 router.use('/admin/games', GameAdminRoutes);
 router.use('/admin/platform-apps', PlatformAppRoutes);
 router.use('/admin/platform-users', PlatformUserRoutes);
+router.use('/admin/analytics', AnalyticsRoutes);
 router.use('/admin', AdminRoutes);
 
 export default router;

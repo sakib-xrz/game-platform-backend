@@ -11,7 +11,15 @@ const validateRequest =
         params: req.params,
       });
       if (parsed.body !== undefined) req.body = parsed.body;
-      if (parsed.query !== undefined) Object.assign(req.query, parsed.query);
+      if (parsed.query !== undefined) {
+        // Force-replace query so coerced numbers/dates always reach controllers.
+        Object.defineProperty(req, 'query', {
+          value: parsed.query,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      }
       if (parsed.params !== undefined) Object.assign(req.params, parsed.params);
       next();
     } catch (error) {
