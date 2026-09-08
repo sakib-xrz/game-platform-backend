@@ -73,7 +73,7 @@ const resolveWindow = (query: { from?: Date; to?: Date }) => {
   const to = query.to ?? now;
   const from =
     query.from ??
-    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1, 0, 0, 0));
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
   if (from >= to) {
     throw new AppError(httpStatus.BAD_REQUEST, 'Analytics from must be before to');
   }
@@ -367,6 +367,8 @@ const getOverview = async (query: AnalyticsOverviewQuery) => {
 const listUsers = async (query: AnalyticsUsersQuery) => {
   const { from, to } = resolveWindow(query);
   const pagination = getPagination(query.page, query.limit);
+  const limitSql = Prisma.raw(String(pagination.limit));
+  const offsetSql = Prisma.raw(String(pagination.skip));
   const botIds = await getActiveBotIds();
   const search = query.search.trim();
   const playersOnly = query.players_only !== false;
@@ -392,18 +394,15 @@ const listUsers = async (query: AnalyticsUsersQuery) => {
       ? Prisma.sql`WHERE ${Prisma.join(platformFilters, ' AND ')}`
       : Prisma.sql``;
 
-  const sortColumn =
-    query.sort === 'won'
-      ? 'won'
-      : query.sort === 'coins_added'
-        ? 'coins_added'
-        : query.sort === 'net_result'
-          ? 'net_result'
-          : query.sort === 'balance'
-            ? 'balance'
-            : query.sort === 'company_profit'
-              ? 'company_profit'
-              : 'company_profit';
+  const sortColumnMap = {
+    lost: 'lost',
+    won: 'won',
+    coins_added: 'coins_added',
+    net_result: 'net_result',
+    balance: 'balance',
+    company_profit: 'company_profit',
+  } as const;
+  const sortColumn = sortColumnMap[query.sort] ?? 'company_profit';
   const sortDir = query.sort_dir === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
 
   const activityFilter = playersOnly
@@ -486,8 +485,8 @@ const listUsers = async (query: AnalyticsUsersQuery) => {
     FROM enriched e
     ${activityFilter}
     ORDER BY ${Prisma.raw(`e.${sortColumn}`)} ${sortDir}, e.platform_user_id ASC
-    LIMIT ${pagination.limit}
-    OFFSET ${pagination.skip}
+    LIMIT ${limitSql}
+    OFFSET ${offsetSql}
   `);
 
   const countRows = await prisma.$queryRaw<Array<{ total: string }>>(Prisma.sql`
@@ -635,8 +634,8 @@ const getUserDetail = async (user_id: string, query: AnalyticsUserDetailQuery) =
         ${Prisma.join(betUnions, ' UNION ALL ')}
       ) games
       ORDER BY created_at DESC
-      LIMIT ${pagination.limit}
-      OFFSET ${pagination.skip}
+      LIMIT ${Prisma.raw(String(pagination.limit))}
+      OFFSET ${Prisma.raw(String(pagination.skip))}
     `),
     prisma.$queryRaw<Array<{ total: string }>>(Prisma.sql`
       SELECT COUNT(*)::text AS total

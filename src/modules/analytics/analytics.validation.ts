@@ -27,12 +27,18 @@ export const analyticsUsersSchema = z.object({
     /** When true (default), only humans who placed bets in the window. */
     players_only: boolQuery.default(true),
     page: z.coerce.number().int().positive().default(1),
-    limit: z.coerce
-      .number()
-      .int()
-      .refine((value) => [10, 20, 50, 100].includes(value), {
-        message: 'limit must be 10, 20, 50, or 100',
-      })
+    limit: z
+      .union([
+        z.literal(10),
+        z.literal(20),
+        z.literal(50),
+        z.literal(100),
+        z.literal('10'),
+        z.literal('20'),
+        z.literal('50'),
+        z.literal('100'),
+      ])
+      .transform((value) => Number(value) as 10 | 20 | 50 | 100)
       .default(20),
     sort: z
       .enum(['lost', 'won', 'coins_added', 'net_result', 'balance', 'company_profit'])
@@ -49,12 +55,18 @@ export const analyticsUserDetailSchema = z.object({
     from: dateQuery,
     to: dateQuery,
     page: z.coerce.number().int().positive().default(1),
-    limit: z.coerce
-      .number()
-      .int()
-      .refine((value) => [10, 20, 50, 100].includes(value), {
-        message: 'limit must be 10, 20, 50, or 100',
-      })
+    limit: z
+      .union([
+        z.literal(10),
+        z.literal(20),
+        z.literal(50),
+        z.literal(100),
+        z.literal('10'),
+        z.literal('20'),
+        z.literal('50'),
+        z.literal('100'),
+      ])
+      .transform((value) => Number(value) as 10 | 20 | 50 | 100)
       .default(50),
   }),
 });
