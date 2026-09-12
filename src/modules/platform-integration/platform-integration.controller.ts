@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import httpStatus from 'http-status';
 import catchAsync from '@/utils/catch-async';
 import sendResponse from '@/utils/send-response';
+import AppError from '@/errors/app-error';
 import PlatformIntegrationService from './platform-integration.services';
 import type {
   AppCredentials,
@@ -9,6 +10,13 @@ import type {
   SyncPlatformUserBody,
   WithdrawPlatformUserCoinsBody,
 } from './platform-integration.validation';
+
+const requirePlatformApp = (req: Request) => {
+  if (!req.platform_app) {
+    throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid app credentials');
+  }
+  return req.platform_app;
+};
 
 const syncPlatformUser = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.syncPlatformUser(
@@ -25,6 +33,7 @@ const syncPlatformUser = catchAsync(async (req: Request, res: Response) => {
 
 const creditPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.creditPlatformUserCoins(
+    requirePlatformApp(req),
     req.body as CreditPlatformUserCoinsBody,
     req.request_id,
   );
@@ -70,6 +79,7 @@ const launchPlatformUser = catchAsync(async (req: Request, res: Response) => {
 
 const withdrawPlatformUserCoins = catchAsync(async (req: Request, res: Response) => {
   const data = await PlatformIntegrationService.withdrawPlatformUserCoins(
+    requirePlatformApp(req),
     req.body as WithdrawPlatformUserCoinsBody,
     req.request_id,
   );

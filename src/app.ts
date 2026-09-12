@@ -29,6 +29,9 @@ app.use(
       'Idempotency-Key',
       'X-Request-Id',
       'X-User-Id',
+      'X-App-Name',
+      'X-Package-Name',
+      'X-Sha-Key',
     ],
   }),
 );

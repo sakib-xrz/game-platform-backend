@@ -8,8 +8,15 @@ import {
 import AppError from '@/errors/app-error';
 import config from '@/config';
 import prisma from '@/lib/prisma';
-import { normalizePackageName, normalizeShaKey } from '@/modules/platform-app/platform-app.validation';
-import { creditPlatformPurchase, debitPlatformWithdrawal, ensureWallet } from '@/modules/wallet/wallet.services';
+import {
+  normalizePackageName,
+  normalizeShaKey,
+} from '@/modules/platform-app/platform-app.validation';
+import {
+  creditPlatformPurchase,
+  debitPlatformWithdrawal,
+  ensureWallet,
+} from '@/modules/wallet/wallet.services';
 import type {
   AppCredentials,
   CreditPlatformUserCoinsBody,
@@ -27,7 +34,7 @@ export type PlatformAppContext = {
   status: PlatformAppStatus;
 };
 
-const resolveActivePlatformApp = async (
+export const resolveActivePlatformApp = async (
   credentials: AppCredentials,
 ): Promise<PlatformAppContext> => {
   const package_name = normalizePackageName(credentials.package_name);
@@ -49,7 +56,8 @@ const resolveActivePlatformApp = async (
     throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid app credentials');
   }
 
-  const name_matches = app.app_name.trim().toLowerCase() === app_name.toLowerCase();
+  const name_matches =
+    app.app_name.trim().toLowerCase() === app_name.toLowerCase();
   const sha_matches = normalizeShaKey(app.sha_key) === sha_key;
   if (!name_matches || !sha_matches) {
     throw new AppError(httpStatus.UNAUTHORIZED, 'Invalid app credentials');
@@ -117,7 +125,10 @@ const writePlatformAudit = async (
   });
 };
 
-const getWalletBalance = async (user_id: string, tx: Prisma.TransactionClient = prisma) => {
+const getWalletBalance = async (
+  user_id: string,
+  tx: Prisma.TransactionClient = prisma,
+) => {
   const wallet = await ensureWallet(user_id, tx);
   return wallet.balance;
 };
@@ -153,7 +164,10 @@ const findPlatformUserOrThrow = async (
     select: platformUserSelect,
   });
   if (!user) {
-    throw new AppError(httpStatus.NOT_FOUND, 'Platform user not found for this app');
+    throw new AppError(
+      httpStatus.NOT_FOUND,
+      'Platform user not found for this app',
+    );
   }
   return user;
 };
@@ -249,7 +263,10 @@ const getPlatformUserCoins = async (
   external_user_id: string,
 ) => {
   const platform_app = await resolveActivePlatformApp(credentials);
-  const user = await findPlatformUserOrThrow(platform_app, external_user_id.trim());
+  const user = await findPlatformUserOrThrow(
+    platform_app,
+    external_user_id.trim(),
+  );
   const balance = await getWalletBalance(user.id);
   return {
     user_id: user.id,
@@ -266,7 +283,10 @@ const launchPlatformUser = async (
   path?: string,
 ) => {
   const platform_app = await resolveActivePlatformApp(credentials);
-  const user = await findPlatformUserOrThrow(platform_app, external_user_id.trim());
+  const user = await findPlatformUserOrThrow(
+    platform_app,
+    external_user_id.trim(),
+  );
   if (user.status !== PlatformUserStatus.active) {
     throw new AppError(httpStatus.FORBIDDEN, 'Platform user is disabled');
   }
@@ -278,10 +298,10 @@ const launchPlatformUser = async (
 };
 
 const creditPlatformUserCoins = async (
+  platform_app: PlatformAppContext,
   body: CreditPlatformUserCoinsBody,
   request_id?: string,
 ) => {
-  const platform_app = await resolveActivePlatformApp(body);
   const external_user_id = body.external_user_id.trim();
   const amount = BigInt(body.amount);
   const client_request_id = body.client_request_id.trim();
@@ -309,7 +329,10 @@ const creditPlatformUserCoins = async (
 
   if (existing_deposit) {
     if (existing_deposit.external_user_id !== external_user_id) {
-      throw new AppError(httpStatus.CONFLICT, 'client_request_id belongs to another user');
+      throw new AppError(
+        httpStatus.CONFLICT,
+        'client_request_id belongs to another user',
+      );
     }
     return {
       external_user_id,
@@ -321,63 +344,66 @@ const creditPlatformUserCoins = async (
     };
   }
 
-  return prisma.$transaction(async (tx) => {
-    const { ledger, balance_after } = await creditPlatformPurchase(tx, {
-      user_id: user.id,
-      amount,
-      reference_type: 'platform_coin_deposit',
-      reference_id: client_request_id,
-      metadata: {
-        platform_app_id: platform_app.id,
-        external_user_id,
-        client_request_id,
-        received_amount: amount.toString(),
-        converted_amount: amount.toString(),
-      },
-    });
+  return prisma.$transaction(
+    async (tx) => {
+      const { ledger, balance_after } = await creditPlatformPurchase(tx, {
+        user_id: user.id,
+        amount,
+        reference_type: 'platform_coin_deposit',
+        reference_id: client_request_id,
+        metadata: {
+          platform_app_id: platform_app.id,
+          external_user_id,
+          client_request_id,
+          received_amount: amount.toString(),
+          converted_amount: amount.toString(),
+        },
+      });
 
-    const deposit = await tx.platformCoinDeposit.create({
-      data: {
-        platform_app_id: platform_app.id,
-        platform_user_id: user.id,
-        external_user_id,
-        client_request_id,
-        received_amount: amount,
-        converted_amount: amount,
-        wallet_ledger_id: ledger.id,
-      },
-    });
+      const deposit = await tx.platformCoinDeposit.create({
+        data: {
+          platform_app_id: platform_app.id,
+          platform_user_id: user.id,
+          external_user_id,
+          client_request_id,
+          received_amount: amount,
+          converted_amount: amount,
+          wallet_ledger_id: ledger.id,
+        },
+      });
 
-    await writePlatformAudit(tx, platform_app.id, {
-      action: 'platform_user.coin_credit',
-      entity_type: 'platform_coin_deposit',
-      entity_id: deposit.id,
-      request_id,
-      new_values: {
+      await writePlatformAudit(tx, platform_app.id, {
+        action: 'platform_user.coin_credit',
+        entity_type: 'platform_coin_deposit',
+        entity_id: deposit.id,
+        request_id,
+        new_values: {
+          external_user_id,
+          received_amount: amount.toString(),
+          converted_amount: amount.toString(),
+          balance: balance_after.toString(),
+          client_request_id,
+        },
+      });
+
+      return {
         external_user_id,
         received_amount: amount.toString(),
         converted_amount: amount.toString(),
         balance: balance_after.toString(),
-        client_request_id,
-      },
-    });
-
-    return {
-      external_user_id,
-      received_amount: amount.toString(),
-      converted_amount: amount.toString(),
-      balance: balance_after.toString(),
-      currency: DEFAULT_CURRENCY_CODE,
-      idempotent: false,
-    };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        currency: DEFAULT_CURRENCY_CODE,
+        idempotent: false,
+      };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 };
 
 const withdrawPlatformUserCoins = async (
+  platform_app: PlatformAppContext,
   body: WithdrawPlatformUserCoinsBody,
   request_id?: string,
 ) => {
-  const platform_app = await resolveActivePlatformApp(body);
   const external_user_id = body.external_user_id.trim();
   const amount = BigInt(body.amount);
   const client_request_id = body.client_request_id.trim();
@@ -405,7 +431,10 @@ const withdrawPlatformUserCoins = async (
 
   if (existing_withdrawal) {
     if (existing_withdrawal.external_user_id !== external_user_id) {
-      throw new AppError(httpStatus.CONFLICT, 'client_request_id belongs to another user');
+      throw new AppError(
+        httpStatus.CONFLICT,
+        'client_request_id belongs to another user',
+      );
     }
     return {
       external_user_id,
@@ -419,64 +448,71 @@ const withdrawPlatformUserCoins = async (
 
   const current_balance = await getWalletBalance(user.id);
   if (current_balance < amount) {
-    throw new AppError(httpStatus.BAD_REQUEST, 'Insufficient wallet balance for withdrawal', {
-      balance: [current_balance.toString()],
-      requested_amount: [amount.toString()],
-      shortfall: [(amount - current_balance).toString()],
-      currency: [DEFAULT_CURRENCY_CODE],
-    });
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      'Insufficient wallet balance for withdrawal',
+      {
+        balance: [current_balance.toString()],
+        requested_amount: [amount.toString()],
+        shortfall: [(amount - current_balance).toString()],
+        currency: [DEFAULT_CURRENCY_CODE],
+      },
+    );
   }
 
-  return prisma.$transaction(async (tx) => {
-    const { ledger, balance_after } = await debitPlatformWithdrawal(tx, {
-      user_id: user.id,
-      amount,
-      reference_type: 'platform_coin_withdrawal',
-      reference_id: client_request_id,
-      metadata: {
-        platform_app_id: platform_app.id,
-        external_user_id,
-        client_request_id,
-        requested_amount: amount.toString(),
-        transferred_amount: amount.toString(),
-      },
-    });
+  return prisma.$transaction(
+    async (tx) => {
+      const { ledger, balance_after } = await debitPlatformWithdrawal(tx, {
+        user_id: user.id,
+        amount,
+        reference_type: 'platform_coin_withdrawal',
+        reference_id: client_request_id,
+        metadata: {
+          platform_app_id: platform_app.id,
+          external_user_id,
+          client_request_id,
+          requested_amount: amount.toString(),
+          transferred_amount: amount.toString(),
+        },
+      });
 
-    const withdrawal = await tx.platformCoinWithdrawal.create({
-      data: {
-        platform_app_id: platform_app.id,
-        platform_user_id: user.id,
-        external_user_id,
-        client_request_id,
-        requested_amount: amount,
-        transferred_amount: amount,
-        wallet_ledger_id: ledger.id,
-      },
-    });
+      const withdrawal = await tx.platformCoinWithdrawal.create({
+        data: {
+          platform_app_id: platform_app.id,
+          platform_user_id: user.id,
+          external_user_id,
+          client_request_id,
+          requested_amount: amount,
+          transferred_amount: amount,
+          wallet_ledger_id: ledger.id,
+        },
+      });
 
-    await writePlatformAudit(tx, platform_app.id, {
-      action: 'platform_user.coin_withdraw',
-      entity_type: 'platform_coin_withdrawal',
-      entity_id: withdrawal.id,
-      request_id,
-      new_values: {
+      await writePlatformAudit(tx, platform_app.id, {
+        action: 'platform_user.coin_withdraw',
+        entity_type: 'platform_coin_withdrawal',
+        entity_id: withdrawal.id,
+        request_id,
+        new_values: {
+          external_user_id,
+          requested_amount: amount.toString(),
+          transferred_amount: amount.toString(),
+          balance: balance_after.toString(),
+          client_request_id,
+        },
+      });
+
+      return {
         external_user_id,
         requested_amount: amount.toString(),
         transferred_amount: amount.toString(),
         balance: balance_after.toString(),
-        client_request_id,
-      },
-    });
-
-    return {
-      external_user_id,
-      requested_amount: amount.toString(),
-      transferred_amount: amount.toString(),
-      balance: balance_after.toString(),
-      currency: DEFAULT_CURRENCY_CODE,
-      idempotent: false,
-    };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        currency: DEFAULT_CURRENCY_CODE,
+        idempotent: false,
+      };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 };
 
 const PlatformIntegrationService = {

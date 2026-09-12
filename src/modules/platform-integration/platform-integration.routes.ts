@@ -1,6 +1,7 @@
 import express from 'express';
 import validateRequest from '@/middlewares/validate-request';
 import { integrationRateLimiter } from '@/middlewares/rate-limiter';
+import platformAppCredentials from '@/middlewares/platform-app-credentials';
 import PlatformIntegrationController from './platform-integration.controller';
 import {
   creditPlatformUserCoinsSchema,
@@ -22,11 +23,13 @@ PlatformIntegrationRoutes.post(
 PlatformIntegrationRoutes.post(
   '/users/coins',
   validateRequest(creditPlatformUserCoinsSchema),
+  platformAppCredentials,
   PlatformIntegrationController.creditPlatformUserCoins,
 );
 PlatformIntegrationRoutes.post(
   '/users/coins/withdraw',
   validateRequest(withdrawPlatformUserCoinsSchema),
+  platformAppCredentials,
   PlatformIntegrationController.withdrawPlatformUserCoins,
 );
 PlatformIntegrationRoutes.get(

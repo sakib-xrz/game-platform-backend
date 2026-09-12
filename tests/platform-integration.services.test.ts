@@ -139,12 +139,14 @@ describe('PlatformIntegrationService', () => {
       wallet_ledger: { balance_after: 1500n },
     });
 
-    const result = await PlatformIntegrationService.creditPlatformUserCoins({
-      ...app_credentials,
-      external_user_id: 'app-user-123',
-      amount: '500',
-      client_request_id: 'purchase-001',
-    });
+    const result = await PlatformIntegrationService.creditPlatformUserCoins(
+      platform_app,
+      {
+        external_user_id: 'app-user-123',
+        amount: '500',
+        client_request_id: 'purchase-001',
+      },
+    );
 
     expect(result.idempotent).toBe(true);
     expect(result.received_amount).toBe('500');
@@ -173,12 +175,14 @@ describe('PlatformIntegrationService', () => {
       return callback(tx);
     });
 
-    const result = await PlatformIntegrationService.creditPlatformUserCoins({
-      ...app_credentials,
-      external_user_id: 'app-user-123',
-      amount: '500',
-      client_request_id: 'purchase-002',
-    });
+    const result = await PlatformIntegrationService.creditPlatformUserCoins(
+      platform_app,
+      {
+        external_user_id: 'app-user-123',
+        amount: '500',
+        client_request_id: 'purchase-002',
+      },
+    );
 
     expect(result.idempotent).toBe(false);
     expect(result.received_amount).toBe('500');
@@ -205,8 +209,7 @@ describe('PlatformIntegrationService', () => {
     mocks.ensureWallet.mockResolvedValue({ balance: 300n });
 
     await expect(
-      PlatformIntegrationService.withdrawPlatformUserCoins({
-        ...app_credentials,
+      PlatformIntegrationService.withdrawPlatformUserCoins(platform_app, {
         external_user_id: 'app-user-123',
         amount: '500',
         client_request_id: 'withdraw-001',
@@ -238,12 +241,14 @@ describe('PlatformIntegrationService', () => {
       return callback(tx);
     });
 
-    const result = await PlatformIntegrationService.withdrawPlatformUserCoins({
-      ...app_credentials,
-      external_user_id: 'app-user-123',
-      amount: '500',
-      client_request_id: 'withdraw-002',
-    });
+    const result = await PlatformIntegrationService.withdrawPlatformUserCoins(
+      platform_app,
+      {
+        external_user_id: 'app-user-123',
+        amount: '500',
+        client_request_id: 'withdraw-002',
+      },
+    );
 
     expect(result.idempotent).toBe(false);
     expect(result.requested_amount).toBe('500');
@@ -260,12 +265,14 @@ describe('PlatformIntegrationService', () => {
       wallet_ledger: { balance_after: 100n },
     });
 
-    const result = await PlatformIntegrationService.withdrawPlatformUserCoins({
-      ...app_credentials,
-      external_user_id: 'app-user-123',
-      amount: '500',
-      client_request_id: 'withdraw-003',
-    });
+    const result = await PlatformIntegrationService.withdrawPlatformUserCoins(
+      platform_app,
+      {
+        external_user_id: 'app-user-123',
+        amount: '500',
+        client_request_id: 'withdraw-003',
+      },
+    );
 
     expect(result.idempotent).toBe(true);
     expect(result.transferred_amount).toBe('500');

@@ -40,20 +40,19 @@ export const syncPlatformUserSchema = z.object({
   }),
 });
 
+/** Coin credit/withdraw — app credentials come from headers, not body. */
+const coinTransferBodySchema = z.object({
+  external_user_id: externalUserId,
+  amount,
+  client_request_id: clientRequestId,
+});
+
 export const creditPlatformUserCoinsSchema = z.object({
-  body: appCredentialsSchema.extend({
-    external_user_id: externalUserId,
-    amount,
-    client_request_id: clientRequestId,
-  }),
+  body: coinTransferBodySchema,
 });
 
 export const withdrawPlatformUserCoinsSchema = z.object({
-  body: appCredentialsSchema.extend({
-    external_user_id: externalUserId,
-    amount,
-    client_request_id: clientRequestId,
-  }),
+  body: coinTransferBodySchema,
 });
 
 export const externalUserIdParamSchema = z.object({
