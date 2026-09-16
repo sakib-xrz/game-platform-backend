@@ -24,10 +24,11 @@ import { buildTeenPattiPreview } from '@/modules/teen-patti/teen-patti.public';
 import { buildTeenPattiResultCommitment } from '@/modules/teen-patti/teen-patti.audit';
 import { withSerializableRetry } from '@/modules/greedy/greedy.utils';
 import { logger } from '@/utils/logger';
-import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-outcome';
+import { selectRoundWinner } from '@/modules/game-bot/select-round-winner';
 import { loadTeenPattiRoundBets } from '@/modules/game-bot/biased-round';
 import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
 import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
+import { applyPlayerRiskAfterRound } from '@/modules/game-bot/player-risk';
 import { getTeenPattiTopWinnersByRound } from '@/modules/teen-patti/teen-patti.leaderboard';
 
 const SETTLEMENT_BATCH_USERS = 50;
@@ -260,14 +261,11 @@ const applyBiasedResultAtLock = async (round_id: string): Promise<void> => {
   }));
 
   const policy = await getGameBotPolicy();
-  const biased = policy.enabled
-    ? pickBiasedWinner({
-        options: biased_options,
-        bets: round_bets,
-        target_human_win_rate: policy.target_human_win_rate,
-        min_human_bets_before_bias: policy.min_human_bets_before_bias,
-      })
-    : pickNaturalWinner(biased_options);
+  const biased = await selectRoundWinner({
+    options: biased_options,
+    bets: round_bets,
+    policy,
+  });
 
   const deal = dealWithWinningOption(
     options.map((option) => ({ id: option.id, code: option.code })),
@@ -712,6 +710,19 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
         data: settlement_rows,
         skipDuplicates: true,
       });
+      if (!isBotUserIdSync(user_id)) {
+        const policy = await getGameBotPolicy();
+        await applyPlayerRiskAfterRound(
+          {
+            user_id,
+            won: false,
+            payout: 0n,
+            multiplier: 2,
+            policy,
+          },
+          tx,
+        );
+      }
       return;
     }
 
@@ -842,6 +853,18 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
         } satisfies WalletBalanceUpdatedPayload,
       },
     });
+
+    const policy = await getGameBotPolicy();
+    await applyPlayerRiskAfterRound(
+      {
+        user_id,
+        won: true,
+        payout: total_payout,
+        multiplier: 2,
+        policy,
+      },
+      tx,
+    );
   });
 };
 

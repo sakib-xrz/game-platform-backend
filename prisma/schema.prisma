@@ -1644,15 +1644,36 @@ model GameBot {
 }
 
 model GameBotPolicy {
-  id                         String   @id @default(cuid())
-  code                       String   @unique @default("default")
-  enabled                    Boolean  @default(true)
-  target_human_win_rate      Float    @default(0.15)
-  min_bots_per_round         Int      @default(2)
-  max_bots_per_round         Int      @default(8)
-  min_human_bets_before_bias Int      @default(1)
-  created_at                 DateTime @default(now())
-  updated_at                 DateTime @updatedAt
+  id                            String   @id @default(cuid())
+  code                          String   @unique @default("default")
+  enabled                       Boolean  @default(true)
+  target_human_win_rate         Float    @default(0.015)
+  min_bots_per_round            Int      @default(6)
+  max_bots_per_round            Int      @default(10)
+  min_human_bets_before_bias    Int      @default(1)
+  max_human_payout_per_round    BigInt   @default(300000)
+  win_streak_trigger            Int      @default(2)
+  cooling_rounds_after_streak   Int      @default(15)
+  cooling_rounds_after_big_win  Int      @default(20)
+  cooling_rounds_after_jackpot  Int      @default(50)
+  jackpot_cooldown_rounds       Int      @default(300)
+  jackpot_multiplier_threshold  Float    @default(25)
+  high_jackpot_allow_rate       Float    @default(0.00303)
+  mid_jackpot_allow_rate        Float    @default(0.004)
+  created_at                    DateTime @default(now())
+  updated_at                    DateTime @updatedAt
 
   @@map("game_bot_policies")
+}
+
+model GamePlayerRiskState {
+  user_id                     String   @id
+  cooling_remaining           Int      @default(0)
+  win_streak                  Int      @default(0)
+  jackpot_cooldown_remaining  Int      @default(0)
+  created_at                  DateTime @default(now())
+  updated_at                  DateTime @updatedAt
+
+  @@index([cooling_remaining])
+  @@map("game_player_risk_states")
 }

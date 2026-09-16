@@ -60,7 +60,8 @@ const shouldActivateBots = (
 ): boolean => {
   const duration = betting_ends_at.getTime() - betting_started_at.getTime();
   const elapsed = Date.now() - betting_started_at.getTime();
-  return human_bet_count > 0 || elapsed >= duration * 0.2;
+  // Fill tables early so rounds never look empty / solo.
+  return human_bet_count > 0 || elapsed >= duration * 0.08;
 };
 
 const countHumanBets = async (round_id: string, game_code: string): Promise<number> => {
@@ -259,9 +260,13 @@ const orchestrateRound = async (context: OpenRoundContext, policy: Awaited<Retur
   if (!shouldActivateBots(context.betting_started_at, context.betting_ends_at, human_bets)) return;
 
   const existing_bot_bets = await countBotBets(context.round_id, context.game_code);
+  // Always aim for a full-looking table; ramp to max once any human joins.
   const target_bots = Math.min(
     policy.max_bots_per_round,
-    Math.max(policy.min_bots_per_round, human_bets > 0 ? policy.max_bots_per_round : policy.min_bots_per_round),
+    Math.max(
+      policy.min_bots_per_round,
+      human_bets > 0 ? policy.max_bots_per_round : policy.min_bots_per_round,
+    ),
   );
   const bets_to_place = Math.max(0, target_bots - existing_bot_bets);
   if (!bets_to_place) return;

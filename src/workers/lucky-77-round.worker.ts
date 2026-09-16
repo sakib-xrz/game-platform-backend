@@ -27,10 +27,14 @@ import { getLucky77TopWinnersByRound } from '@/modules/lucky-77/lucky-77.leaderb
 import { secureRandomBigIntBelow } from '@/utils/crypto-rng';
 import { sha256 } from '@/utils/hash';
 import { logger } from '@/utils/logger';
-import { pickBiasedWinner, pickNaturalWinner } from '@/modules/game-bot/biased-outcome';
+import { selectRoundWinner } from '@/modules/game-bot/select-round-winner';
 import { loadLucky77RoundBets } from '@/modules/game-bot/biased-round';
 import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
 import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
+import {
+  applyPlayerRiskAfterRound,
+  optionMultiplier,
+} from '@/modules/game-bot/player-risk';
 
 const SETTLEMENT_BATCH_USERS = 50;
 const REFUND_BATCH_USERS = 50;
@@ -218,14 +222,11 @@ const generateResult = async (round_id: string): Promise<void> => {
   const options = round.config_version.options;
   const policy = await getGameBotPolicy();
   const round_bets = await loadLucky77RoundBets(round.id);
-  const biased = policy.enabled
-    ? pickBiasedWinner({
-        options,
-        bets: round_bets,
-        target_human_win_rate: policy.target_human_win_rate,
-        min_human_bets_before_bias: policy.min_human_bets_before_bias,
-      })
-    : pickNaturalWinner(options);
+  const biased = await selectRoundWinner({
+    options,
+    bets: round_bets,
+    policy,
+  });
   const winner = options.find((option) => option.id === biased.option_id) ?? options[options.length - 1];
   if (!winner) throw new Error('Lucky 77 result winner could not be selected');
 
@@ -488,6 +489,25 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
           },
         });
       }
+    }
+
+    if (!isBotUserIdSync(user_id)) {
+      const policy = await getGameBotPolicy();
+      const sample_win = bets.find(
+        (bet) => bet.option_version_id === result.winning_option_version_id,
+      );
+      await applyPlayerRiskAfterRound(
+        {
+          user_id,
+          won: total_payout > 0n,
+          payout: total_payout,
+          multiplier: sample_win
+            ? optionMultiplier(sample_win.payout_numerator, sample_win.payout_denominator)
+            : 0,
+          policy,
+        },
+        tx,
+      );
     }
   });
 };
