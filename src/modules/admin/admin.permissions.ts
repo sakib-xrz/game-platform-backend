@@ -31,6 +31,8 @@ const PLATFORM_SUPER_ADMIN_PERMISSIONS = [
   'approval.read',
   'approval.decide',
   'audit.read',
+  'game.read',
+  'game.runtime.control',
   'wallet.read',
   'wallet.adjust.create',
   'wallet.adjust.approve',

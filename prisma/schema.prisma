@@ -1546,6 +1546,7 @@ model PlatformApp {
   sha_key                  String
   signing_secret           String
   signing_secret_previous  String?
+  signing_secret_previous_expires_at DateTime?
   status                   PlatformAppStatus @default(active)
   created_by_admin_id      String?
   created_at               DateTime          @default(now())
@@ -1666,14 +1667,65 @@ model GameBotPolicy {
   @@map("game_bot_policies")
 }
 
+enum BigWinsMode {
+  careful
+  balanced
+  open
+
+  @@map("big_wins_mode")
+}
+
+model GameHouseProfitConfig {
+  id                         String      @id @default(cuid())
+  game_code                  String      @unique
+  target_house_profit_pct    Float       @default(60.0)
+  target_player_rtp_pct      Float       @default(40.0)
+  max_daily_loss_coins       BigInt      @default(3000000)
+  give_back_lost_pct         Float       @default(10.0)
+  give_back_window_days      Int         @default(8)
+  big_wins_mode              BigWinsMode @default(balanced)
+  weekly_guarantee_enabled   Boolean     @default(true)
+  min_weekly_profit_pct      Float       @default(55.0)
+  created_at                 DateTime    @default(now())
+  updated_at                 DateTime    @updatedAt
+
+  @@map("game_house_profit_configs")
+}
+
+model DailyGameHouseStat {
+  id              String   @id @default(cuid())
+  game_code       String
+  stat_date       String
+  total_wagered   BigInt   @default(0)
+  total_paid_out  BigInt   @default(0)
+  house_profit    BigInt   @default(0)
+  house_kept_pct  Float    @default(0.0)
+  total_bets      Int      @default(0)
+  total_players   Int      @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@unique([game_code, stat_date])
+  @@index([stat_date])
+  @@index([game_code])
+  @@map("daily_game_house_stats")
+}
+
 model GamePlayerRiskState {
   user_id                     String   @id
   cooling_remaining           Int      @default(0)
   win_streak                  Int      @default(0)
   jackpot_cooldown_remaining  Int      @default(0)
+  lifetime_wagered            BigInt   @default(0)
+  lifetime_payout             BigInt   @default(0)
+  lifetime_net_profit         BigInt   @default(0)
+  rolling_8d_wagered          BigInt   @default(0)
+  rolling_8d_payout           BigInt   @default(0)
+  rolling_8d_net_profit       BigInt   @default(0)
   created_at                  DateTime @default(now())
   updated_at                  DateTime @updatedAt
 
   @@index([cooling_remaining])
+  @@index([lifetime_net_profit])
   @@map("game_player_risk_states")
 }

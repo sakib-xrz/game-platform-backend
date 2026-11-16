@@ -13,9 +13,13 @@ import GreedyAdminOpsRoutes from './greedy-admin-ops.routes';
 import TeenPattiAdminOpsRoutes from './teen-patti-admin-ops.routes';
 import Lucky77AdminOpsRoutes from './lucky-77-admin-ops.routes';
 import GreedyClassicAdminOpsRoutes from './greedy-classic-admin-ops.routes';
+import HouseProfitAdminRoutes from './house-profit.routes';
 
 export const GameAdminRoutes = express.Router();
 GameAdminRoutes.use(adminAuth, adminPasswordGate);
+
+// House Profit & Financial Overview Routes (Tecsior-style Operator Metrics)
+GameAdminRoutes.use('/house-profit', HouseProfitAdminRoutes);
 GameAdminRoutes.get('/greedy/runtime', requireAdminPermission('game.read'), GameAdminController.getRuntime);
 GameAdminRoutes.get('/greedy/config-versions', requireAdminPermission('game.read'), GameAdminController.listConfigs);
 GameAdminRoutes.post('/greedy/config-versions/validate', requireAdminPermission('game.config.draft.create'), validateRequest(createGreedyConfigSchema), GameAdminController.validateConfig);

@@ -32,6 +32,7 @@ import {
   applyPlayerRiskAfterRound,
   optionMultiplier,
 } from '@/modules/game-bot/player-risk';
+import { recordSettledRoundFinancials } from '@/modules/game-bot/profit-steering.service';
 
 const SETTLEMENT_BATCH_USERS = 50;
 const REFUND_BATCH_USERS = 50;
@@ -222,6 +223,7 @@ const generateResult = async (round_id: string): Promise<void> => {
     options,
     bets: round_bets,
     policy,
+    game_code: 'greedy-classic',
   });
   const winner = options.find((option) => option.id === biased.option_id) ?? options[options.length - 1];
   if (!winner) throw new Error('Greedy result winner could not be selected');
@@ -527,6 +529,22 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
             result.winning_option.payout_denominator,
           ),
           policy,
+        },
+        tx,
+      );
+
+      const user_stake = bets.reduce((sum, b) => sum + b.amount, 0n);
+      await recordSettledRoundFinancials(
+        {
+          game_code: 'greedy-classic',
+          round_id,
+          human_bets: [
+            {
+              user_id,
+              stake: user_stake,
+              payout: total_payout,
+            },
+          ],
         },
         tx,
       );

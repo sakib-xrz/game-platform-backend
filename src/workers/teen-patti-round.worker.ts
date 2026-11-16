@@ -29,6 +29,7 @@ import { loadTeenPattiRoundBets } from '@/modules/game-bot/biased-round';
 import { getGameBotPolicy } from '@/modules/game-bot/bot-policy';
 import { isBotUserIdSync } from '@/modules/game-bot/bot-identity';
 import { applyPlayerRiskAfterRound } from '@/modules/game-bot/player-risk';
+import { recordSettledRoundFinancials } from '@/modules/game-bot/profit-steering.service';
 import { getTeenPattiTopWinnersByRound } from '@/modules/teen-patti/teen-patti.leaderboard';
 
 const SETTLEMENT_BATCH_USERS = 50;
@@ -265,6 +266,7 @@ const applyBiasedResultAtLock = async (round_id: string): Promise<void> => {
     options: biased_options,
     bets: round_bets,
     policy,
+    game_code: 'teen-patti',
   });
 
   const deal = dealWithWinningOption(
@@ -722,6 +724,22 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
           },
           tx,
         );
+
+        const user_stake = bets.reduce((sum, b) => sum + b.amount, 0n);
+        await recordSettledRoundFinancials(
+          {
+            game_code: 'teen-patti',
+            round_id,
+            human_bets: [
+              {
+                user_id,
+                stake: user_stake,
+                payout: 0n,
+              },
+            ],
+          },
+          tx,
+        );
       }
       return;
     }
@@ -862,6 +880,22 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
         payout: total_payout,
         multiplier: 2,
         policy,
+      },
+      tx,
+    );
+
+    const user_stake = bets.reduce((sum, b) => sum + b.amount, 0n);
+    await recordSettledRoundFinancials(
+      {
+        game_code: 'teen-patti',
+        round_id,
+        human_bets: [
+          {
+            user_id,
+            stake: user_stake,
+            payout: total_payout,
+          },
+        ],
       },
       tx,
     );
