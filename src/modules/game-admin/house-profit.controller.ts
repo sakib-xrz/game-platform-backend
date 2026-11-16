@@ -55,10 +55,13 @@ export class HouseProfitAdminController {
 
           return {
             game_code: code,
-            game_name: code
-              .split('-')
-              .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-              .join(' '),
+            game_name:
+              code === 'greedy-classic'
+                ? 'Monkey Wheel'
+                : code
+                    .split('-')
+                    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                    .join(' '),
             players: stat.total_players,
             bets: stat.total_bets,
             wagered: stat.total_wagered.toString(),

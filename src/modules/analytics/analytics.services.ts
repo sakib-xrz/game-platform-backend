@@ -38,7 +38,7 @@ const GAME_TABLES: GameTableSet[] = [
   },
   {
     code: 'GREEDY_CLASSIC',
-    label: 'Greedy Classic',
+    label: 'Monkey Wheel',
     bets: 'greedy_classic_bets',
     payouts: 'greedy_classic_user_payouts',
     refunds: 'greedy_classic_user_refunds',
