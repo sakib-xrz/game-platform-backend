@@ -1,7 +1,9 @@
 import express from 'express';
-import playerContext from '@/middlewares/player-context';
+import playerContext, { optionalPlayerContext } from '@/middlewares/player-context';
 import validateRequest from '@/middlewares/validate-request';
 import { lucky77BetRateLimiter } from '@/middlewares/rate-limiter';
+import DailyLeaderboardController from '@/modules/leaderboard/daily-leaderboard.controller';
+import { dailyLeaderboardQuerySchema } from '@/modules/leaderboard/daily-leaderboard.validation';
 import Lucky77Controller from './lucky-77.controller';
 import {
   lucky77HistorySchema,
@@ -11,6 +13,12 @@ import {
 
 export const Lucky77Routes = express.Router();
 
+Lucky77Routes.get(
+  '/leaderboard',
+  optionalPlayerContext,
+  validateRequest(dailyLeaderboardQuerySchema),
+  DailyLeaderboardController.getDailyLeaderboardHandler('lucky-77'),
+);
 Lucky77Routes.get('/snapshot', playerContext, Lucky77Controller.getSnapshot);
 Lucky77Routes.post(
   '/bets',

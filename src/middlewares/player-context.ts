@@ -22,4 +22,12 @@ const playerContext = (req: Request, _res: Response, next: NextFunction) => {
   );
 };
 
+export const optionalPlayerContext = (req: Request, _res: Response, next: NextFunction) => {
+  const header_user_id = req.header('x-user-id')?.trim();
+  if (config.allow_dev_identity_header && header_user_id) {
+    req.game_user_id = header_user_id;
+  }
+  next();
+};
+
 export default playerContext;

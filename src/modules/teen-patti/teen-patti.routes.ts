@@ -1,7 +1,9 @@
 import express from 'express';
-import playerContext from '@/middlewares/player-context';
+import playerContext, { optionalPlayerContext } from '@/middlewares/player-context';
 import validateRequest from '@/middlewares/validate-request';
 import { teenPattiBetRateLimiter } from '@/middlewares/rate-limiter';
+import DailyLeaderboardController from '@/modules/leaderboard/daily-leaderboard.controller';
+import { dailyLeaderboardQuerySchema } from '@/modules/leaderboard/daily-leaderboard.validation';
 import TeenPattiController from './teen-patti.controller';
 import {
   teenPattiHistorySchema,
@@ -11,6 +13,12 @@ import {
 
 export const TeenPattiRoutes = express.Router();
 
+TeenPattiRoutes.get(
+  '/leaderboard',
+  optionalPlayerContext,
+  validateRequest(dailyLeaderboardQuerySchema),
+  DailyLeaderboardController.getDailyLeaderboardHandler('teen-patti'),
+);
 TeenPattiRoutes.get('/snapshot', playerContext, TeenPattiController.getSnapshot);
 TeenPattiRoutes.post(
   '/bets',

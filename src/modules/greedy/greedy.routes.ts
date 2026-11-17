@@ -1,7 +1,9 @@
 import express from 'express';
-import playerContext from '@/middlewares/player-context';
+import playerContext, { optionalPlayerContext } from '@/middlewares/player-context';
 import validateRequest from '@/middlewares/validate-request';
 import { betRateLimiter } from '@/middlewares/rate-limiter';
+import DailyLeaderboardController from '@/modules/leaderboard/daily-leaderboard.controller';
+import { dailyLeaderboardQuerySchema } from '@/modules/leaderboard/daily-leaderboard.validation';
 import GreedyController from './greedy.controller';
 import {
   greedyHistorySchema,
@@ -11,6 +13,12 @@ import {
 
 export const GreedyRoutes = express.Router();
 
+GreedyRoutes.get(
+  '/leaderboard',
+  optionalPlayerContext,
+  validateRequest(dailyLeaderboardQuerySchema),
+  DailyLeaderboardController.getDailyLeaderboardHandler('greedy'),
+);
 GreedyRoutes.get('/snapshot', playerContext, GreedyController.getSnapshot);
 GreedyRoutes.post(
   '/bets',
