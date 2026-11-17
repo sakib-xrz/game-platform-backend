@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import { Prisma, PlatformAppStatus } from '@/generated/prisma/client';
 import AppError from '@/errors/app-error';
 import prisma from '@/lib/prisma';
+import config from '@/config';
 import type { AuthenticatedAdmin } from '@/modules/admin/admin.types';
 import { writeAdminAudit, type AdminAuditContext } from '@/modules/admin/admin.services';
 import type { CreatePlatformAppBody, UpdatePlatformAppBody } from './platform-app.validation';
@@ -10,14 +11,21 @@ import {
   generatePlatformSigningSecret,
   maskSigningSecret,
 } from '@/utils/platform-signature';
+import { SeamlessWalletClient } from '@/modules/platform-integration/seamless-wallet.client';
+import { signPlayerToken } from '@/utils/player-token';
 
 const platformAppSelect = {
   id: true,
   app_name: true,
+  app_key: true,
   package_name: true,
   sha_key: true,
   signing_secret: true,
   signing_secret_previous: true,
+  wallet_mode: true,
+  wallet_base_url: true,
+  player_token_secret: true,
+  allowed_origins: true,
   status: true,
   created_by_admin_id: true,
   created_at: true,
@@ -30,10 +38,15 @@ const serializePlatformApp = (
 ) => ({
   id: app.id,
   app_name: app.app_name,
+  app_key: app.app_key,
   package_name: app.package_name,
   sha_key: app.sha_key,
   signing_secret_preview: maskSigningSecret(app.signing_secret),
   has_rotated_signing_secret: Boolean(app.signing_secret_previous),
+  wallet_mode: app.wallet_mode || 'local',
+  wallet_base_url: app.wallet_base_url,
+  player_token_secret: app.player_token_secret,
+  allowed_origins: app.allowed_origins,
   status: app.status,
   created_by_admin_id: app.created_by_admin_id,
   created_at: app.created_at.toISOString(),
@@ -86,9 +99,14 @@ const createPlatformApp = async (
     const created = await tx.platformApp.create({
       data: {
         app_name: body.app_name.trim(),
+        app_key: (body as any).app_key ? (body as any).app_key.trim() : null,
         package_name,
         sha_key,
         signing_secret,
+        wallet_mode: (body as any).wallet_mode || 'local',
+        wallet_base_url: (body as any).wallet_base_url ? (body as any).wallet_base_url.trim() : null,
+        player_token_secret: (body as any).player_token_secret ? (body as any).player_token_secret.trim() : null,
+        allowed_origins: (body as any).allowed_origins ? (body as any).allowed_origins.trim() : null,
         status: body.status === 'disabled' ? PlatformAppStatus.disabled : PlatformAppStatus.active,
         created_by_admin_id: admin.id,
       },
@@ -141,8 +159,35 @@ const updatePlatformApp = async (
       where: { id: app_id },
       data: {
         ...(body.app_name !== undefined ? { app_name: body.app_name.trim() } : {}),
+        ...((body as any).app_key !== undefined
+          ? { app_key: (body as any).app_key ? (body as any).app_key.trim() : null }
+          : {}),
         ...(package_name !== undefined ? { package_name } : {}),
         ...(sha_key !== undefined ? { sha_key } : {}),
+        ...((body as any).wallet_mode !== undefined
+          ? { wallet_mode: (body as any).wallet_mode }
+          : {}),
+        ...((body as any).wallet_base_url !== undefined
+          ? {
+              wallet_base_url: (body as any).wallet_base_url
+                ? (body as any).wallet_base_url.trim()
+                : null,
+            }
+          : {}),
+        ...((body as any).player_token_secret !== undefined
+          ? {
+              player_token_secret: (body as any).player_token_secret
+                ? (body as any).player_token_secret.trim()
+                : null,
+            }
+          : {}),
+        ...((body as any).allowed_origins !== undefined
+          ? {
+              allowed_origins: (body as any).allowed_origins
+                ? (body as any).allowed_origins.trim()
+                : null,
+            }
+          : {}),
         ...(body.status !== undefined
           ? { status: body.status === 'disabled' ? PlatformAppStatus.disabled : PlatformAppStatus.active }
           : {}),
@@ -236,6 +281,56 @@ const regenerateSigningSecret = async (
   return serializePlatformApp(updated, { reveal_signing_secret: true });
 };
 
+const testWalletIntegration = async (app_id: string, test_user_id?: string) => {
+  const app = await findPlatformAppOrThrow(app_id);
+  return SeamlessWalletClient.testRemoteWalletIntegration(
+    app,
+    test_user_id || 'test_user_001',
+  );
+};
+
+const generateTestLaunchUrl = async (
+  app_id: string,
+  options: { game?: string; user_id?: string; username?: string } = {},
+) => {
+  const app = await findPlatformAppOrThrow(app_id);
+  const secret = app.player_token_secret || app.signing_secret;
+  const userId = options.user_id || 'test_player_1';
+  const username = options.username || 'Test Player';
+
+  const token = signPlayerToken(
+    {
+      sub: userId,
+      app: app.app_key || app.package_name,
+      username,
+    },
+    secret,
+    15 * 60,
+  );
+
+  const game = options.game || 'monk-wheel';
+  const path =
+    game === 'teen-patti'
+      ? '/games/teen-patti'
+      : game === 'greedy-classic'
+        ? '/games/greedy-classic'
+        : game === 'lucky-77'
+          ? '/games/lucky-77'
+          : '/';
+
+  const url = new URL(path, `${config.game_frontend_url}/`);
+  url.searchParams.set('token', token);
+  url.searchParams.set('app', app.app_key || app.package_name);
+  url.searchParams.set('game', game);
+
+  return {
+    launch_url: url.toString(),
+    token,
+    app_key: app.app_key || app.package_name,
+    game,
+  };
+};
+
 const PlatformAppService = {
   listPlatformApps,
   getPlatformApp,
@@ -243,6 +338,8 @@ const PlatformAppService = {
   updatePlatformApp,
   deletePlatformApp,
   regenerateSigningSecret,
+  testWalletIntegration,
+  generateTestLaunchUrl,
 };
 
 export default PlatformAppService;

@@ -9,6 +9,7 @@ import {
 import prisma from '@/lib/prisma';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import { ensureWallet } from '@/modules/wallet/wallet.services';
+import { processSeamlessPayoutCredit } from '@/modules/platform-integration/seamless-wallet.services';
 import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
 import {
   GREEDY_GAME_CODE,
@@ -466,47 +467,39 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
         where: { round_id_user_id: { round_id, user_id } },
       });
       if (!existing_payout) {
-        const wallet = await ensureWallet(user_id, tx);
-        const updated_wallet = await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { balance: { increment: total_payout }, version: { increment: 1 } },
-        });
-        const ledger = await tx.walletLedger.create({
-          data: {
-            wallet_id: wallet.id,
-            user_id,
-            game_id: (await tx.greedyRound.findUniqueOrThrow({ where: { id: round_id }, select: { game_id: true } })).game_id,
-            type: WalletLedgerType.win_credit,
-            amount: total_payout,
-            balance_before: wallet.balance,
-            balance_after: updated_wallet.balance,
-            reference_type: 'greedy_round_payout',
-            reference_id: round_id,
-          },
+        const payoutResult = await processSeamlessPayoutCredit(tx, {
+          userId: user_id,
+          amount: total_payout,
+          gameId: (await tx.greedyRound.findUniqueOrThrow({ where: { id: round_id }, select: { game_id: true } })).game_id,
+          gameCode: 'greedy',
+          roundId: round_id,
+          referenceType: 'greedy_round_payout',
         });
         await tx.greedyUserPayout.create({
           data: {
             round_id,
             user_id,
-            wallet_id: wallet.id,
+            wallet_id: payoutResult.walletId,
             winning_bet_count,
             total_winning_stake,
             total_payout,
-            wallet_ledger_id: ledger.id,
+            wallet_ledger_id: payoutResult.ledgerId,
           },
         });
         await tx.outboxEvent.create({
           data: {
-            aggregate_type: 'wallet', aggregate_id: wallet.id,
-            event_type: 'wallet.balance.updated', socket_room: `user:${user_id}`,
+            aggregate_type: 'wallet',
+            aggregate_id: payoutResult.walletId,
+            event_type: 'wallet.balance.updated',
+            socket_room: `user:${user_id}`,
             payload: {
-              wallet_id: wallet.id,
-              balance: updated_wallet.balance.toString(),
-              wallet_version: updated_wallet.version,
+              wallet_id: payoutResult.walletId,
+              balance: payoutResult.balanceAfter.toString(),
+              wallet_version: payoutResult.walletVersion,
               reason: 'greedy_win',
               round_id,
               payout: total_payout.toString(),
-            } satisfies WalletBalanceUpdatedPayload,
+            } as any,
           },
         });
       }

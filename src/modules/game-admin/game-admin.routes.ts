@@ -18,7 +18,7 @@ import HouseProfitAdminRoutes from './house-profit.routes';
 export const GameAdminRoutes = express.Router();
 GameAdminRoutes.use(adminAuth, adminPasswordGate);
 
-// House Profit & Financial Overview Routes (Tecsior-style Operator Metrics)
+// House Profit & Financial Overview Routes (Operator Metrics)
 GameAdminRoutes.use('/house-profit', HouseProfitAdminRoutes);
 GameAdminRoutes.get('/greedy/runtime', requireAdminPermission('game.read'), GameAdminController.getRuntime);
 GameAdminRoutes.get('/greedy/config-versions', requireAdminPermission('game.read'), GameAdminController.listConfigs);

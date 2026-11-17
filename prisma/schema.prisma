@@ -1542,11 +1542,16 @@ model OpsAlert {
 model PlatformApp {
   id                       String            @id @default(cuid())
   app_name                 String
+  app_key                  String?           @unique
   package_name             String            @unique
   sha_key                  String
   signing_secret           String
   signing_secret_previous  String?
   signing_secret_previous_expires_at DateTime?
+  wallet_mode              String            @default("local")
+  wallet_base_url          String?
+  player_token_secret      String?
+  allowed_origins          String?
   status                   PlatformAppStatus @default(active)
   created_by_admin_id      String?
   created_at               DateTime          @default(now())

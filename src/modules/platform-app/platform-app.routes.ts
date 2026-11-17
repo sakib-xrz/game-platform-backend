@@ -55,4 +55,18 @@ PlatformAppRoutes.post(
   PlatformAppController.regenerateSigningSecret,
 );
 
+PlatformAppRoutes.post(
+  '/:app_id/test-wallet',
+  requireAdminPermission('platform.app.manage'),
+  validateRequest(platformAppIdSchema),
+  PlatformAppController.testWalletIntegration,
+);
+
+PlatformAppRoutes.post(
+  '/:app_id/generate-launch-url',
+  requireAdminPermission('platform.app.manage'),
+  validateRequest(platformAppIdSchema),
+  PlatformAppController.generateTestLaunchUrl,
+);
+
 export default PlatformAppRoutes;

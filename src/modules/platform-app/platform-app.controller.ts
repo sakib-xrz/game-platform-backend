@@ -84,6 +84,32 @@ const regenerateSigningSecret = catchAsync(async (req: Request, res: Response) =
   });
 });
 
+const testWalletIntegration = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformAppService.testWalletIntegration(
+    String(req.params.app_id),
+    req.body?.test_user_id ? String(req.body.test_user_id) : undefined,
+  );
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Wallet integration test finished',
+    data,
+  });
+});
+
+const generateTestLaunchUrl = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformAppService.generateTestLaunchUrl(
+    String(req.params.app_id),
+    req.body || {},
+  );
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Test launch URL generated',
+    data,
+  });
+});
+
 const PlatformAppController = {
   listPlatformApps,
   getPlatformApp,
@@ -91,6 +117,8 @@ const PlatformAppController = {
   updatePlatformApp,
   deletePlatformApp,
   regenerateSigningSecret,
+  testWalletIntegration,
+  generateTestLaunchUrl,
 };
 
 export default PlatformAppController;

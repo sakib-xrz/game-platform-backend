@@ -73,3 +73,38 @@ export type SyncPlatformUserBody = z.infer<typeof syncPlatformUserSchema>['body'
 export type CreditPlatformUserCoinsBody = z.infer<typeof creditPlatformUserCoinsSchema>['body'];
 export type WithdrawPlatformUserCoinsBody = z.infer<typeof withdrawPlatformUserCoinsSchema>['body'];
 export type LaunchPlatformUserQuery = z.infer<typeof launchPlatformUserSchema>['query'];
+
+export const verifySessionSchema = z.object({
+  body: z.object({
+    token: z.string().trim().min(1, 'Token is required'),
+    appKey: z.string().trim().optional(),
+    game: z.string().trim().optional(),
+  }),
+});
+
+export const launchGameSchema = z.object({
+  body: z.object({
+    appKey: z.string().trim().min(1, 'appKey is required'),
+    userId: z.string().trim().min(1, 'userId is required'),
+    username: z.string().trim().optional(),
+    avatarUrl: z.string().trim().url().optional().nullable(),
+    game: z.string().trim().optional(),
+  }),
+});
+
+export const getGamesQuerySchema = z.object({
+  query: z.object({
+    app: z.string().trim().min(1, 'app key or package name is required'),
+  }),
+});
+
+export const syncBalanceSchema = z.object({
+  body: z.object({
+    userId: z.string().trim().min(1, 'userId is required'),
+  }),
+});
+
+export type VerifySessionBody = z.infer<typeof verifySessionSchema>['body'];
+export type LaunchGameBody = z.infer<typeof launchGameSchema>['body'];
+export type GetGamesQuery = z.infer<typeof getGamesQuerySchema>['query'];
+export type SyncBalanceBody = z.infer<typeof syncBalanceSchema>['body'];

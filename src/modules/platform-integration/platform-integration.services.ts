@@ -17,10 +17,17 @@ import {
   debitPlatformWithdrawal,
   ensureWallet,
 } from '@/modules/wallet/wallet.services';
+import { signPlayerToken, verifyPlayerToken } from '@/utils/player-token';
+import { SeamlessWalletClient } from './seamless-wallet.client';
+import { syncSeamlessUserBalance } from './seamless-wallet.services';
 import type {
   AppCredentials,
   CreditPlatformUserCoinsBody,
+  GetGamesQuery,
+  LaunchGameBody,
+  SyncBalanceBody,
   SyncPlatformUserBody,
+  VerifySessionBody,
   WithdrawPlatformUserCoinsBody,
 } from './platform-integration.validation';
 
@@ -515,6 +522,230 @@ const withdrawPlatformUserCoins = async (
   );
 };
 
+export const findPlatformAppByIdentifier = async (identifier: string) => {
+  const trimmed = identifier.trim();
+  const app = await prisma.platformApp.findFirst({
+    where: {
+      OR: [
+        { app_key: trimmed },
+        { package_name: trimmed },
+        { id: trimmed },
+      ],
+    },
+  });
+
+  if (!app) {
+    throw new AppError(
+      httpStatus.NOT_FOUND,
+      `Platform app not found for identifier "${identifier}"`,
+    );
+  }
+
+  if (app.status !== PlatformAppStatus.active) {
+    throw new AppError(httpStatus.FORBIDDEN, 'Platform app is disabled');
+  }
+
+  return app;
+};
+
+const GAME_DEFINITIONS = [
+  {
+    gameKey: 'monk-wheel',
+    name: 'Monk Wheel',
+    description: 'High-octane wheel of fortune with up to 20x multipliers and jackpot bonuses.',
+    path: '/',
+    iconUrl: `${config.game_frontend_url}/icons/monk-wheel.png`,
+  },
+  {
+    gameKey: 'teen-patti',
+    name: 'Teen Patti Classic',
+    description: 'Authentic 3-card poker table with real-time multiplayer action.',
+    path: '/games/teen-patti',
+    iconUrl: `${config.game_frontend_url}/icons/teen-patti.png`,
+  },
+  {
+    gameKey: 'greedy-classic',
+    name: 'Greedy Classic',
+    description: 'Classic wheel betting experience with proven player retention.',
+    path: '/games/greedy-classic',
+    iconUrl: `${config.game_frontend_url}/icons/greedy-classic.png`,
+  },
+  {
+    gameKey: 'lucky-77',
+    name: 'Lucky 77',
+    description: 'Fast-paced high-low prediction card showdown.',
+    path: '/games/lucky-77',
+    iconUrl: `${config.game_frontend_url}/icons/lucky-77.png`,
+  },
+];
+
+const getGameCatalog = async (appIdentifier: string) => {
+  const app = await findPlatformAppByIdentifier(appIdentifier);
+  const frontendBase = config.game_frontend_url;
+
+  return {
+    app: {
+      id: app.id,
+      name: app.app_name,
+      appKey: app.app_key || app.package_name,
+      packageName: app.package_name,
+      walletMode: app.wallet_mode,
+      allowedOrigins: app.allowed_origins || '*',
+    },
+    games: GAME_DEFINITIONS.map((g) => ({
+      gameKey: g.gameKey,
+      name: g.name,
+      description: g.description,
+      launchUrl: `${frontendBase}${g.path}`,
+      iconUrl: g.iconUrl,
+    })),
+  };
+};
+
+const verifySession = async (body: VerifySessionBody) => {
+  const { token, appKey } = body;
+
+  // 1. Decode JWT payload unverified to discover target app if appKey is not passed
+  let targetAppIdentifier = appKey;
+  if (!targetAppIdentifier) {
+    try {
+      const parts = token.split('.');
+      if (parts.length === 3 && parts[1]) {
+        let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (base64.length % 4) base64 += '=';
+        const claims = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'));
+        targetAppIdentifier = claims.app;
+      }
+    } catch {
+      // Handled below
+    }
+  }
+
+  if (!targetAppIdentifier) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      'appKey is required or must be present in token app claim',
+    );
+  }
+
+  const app = await findPlatformAppByIdentifier(targetAppIdentifier);
+
+  // 2. Validate token against configured secrets
+  const secrets = [
+    app.player_token_secret,
+    app.signing_secret,
+    app.signing_secret_previous,
+  ].filter(Boolean) as string[];
+
+  const verification = verifyPlayerToken(token, secrets);
+  if (!verification.valid || !verification.claims) {
+    throw new AppError(
+      httpStatus.UNAUTHORIZED,
+      `Invalid or expired player token: ${verification.reason || 'Verification failed'}`,
+    );
+  }
+
+  const claims = verification.claims;
+  const externalUserId = claims.sub.trim();
+  const displayName = claims.username?.trim() || `Player ${externalUserId.slice(-4)}`;
+  const photoUrl = claims.avatarUrl?.trim() || null;
+  const email = `${externalUserId}@${app.package_name}.platform`.toLowerCase();
+
+  // 3. Upsert PlatformUser record
+  const user = await prisma.platformUser.upsert({
+    where: {
+      platform_app_id_external_user_id: {
+        platform_app_id: app.id,
+        external_user_id: externalUserId,
+      },
+    },
+    update: {
+      display_name: displayName,
+      photo_url: photoUrl,
+      status: PlatformUserStatus.active,
+    },
+    create: {
+      platform_app_id: app.id,
+      external_user_id: externalUserId,
+      email,
+      display_name: displayName,
+      photo_url: photoUrl,
+      status: PlatformUserStatus.active,
+    },
+  });
+
+  // 4. Ensure wallet & sync balance
+  let balance = 0n;
+  if (app.wallet_mode === 'seamless') {
+    try {
+      balance = await SeamlessWalletClient.getRemoteBalance(app, externalUserId);
+      const wallet = await ensureWallet(user.id);
+      await prisma.wallet.update({
+        where: { id: wallet.id },
+        data: { balance, version: { increment: 1 } },
+      });
+    } catch (err: any) {
+      // In case host app is unreachable during boot, fallback to cached wallet balance
+      const wallet = await ensureWallet(user.id);
+      balance = wallet.balance;
+    }
+  } else {
+    const wallet = await ensureWallet(user.id);
+    balance = wallet.balance;
+  }
+
+  return {
+    user_id: user.id,
+    external_user_id: user.external_user_id,
+    display_name: user.display_name,
+    photo_url: user.photo_url,
+    balance: balance.toString(),
+    currency: DEFAULT_CURRENCY_CODE,
+    wallet_mode: app.wallet_mode,
+    app_key: app.app_key || app.package_name,
+    app_name: app.app_name,
+  };
+};
+
+const launchGame = async (body: LaunchGameBody) => {
+  const app = await findPlatformAppByIdentifier(body.appKey);
+  const secret = app.player_token_secret || app.signing_secret;
+
+  const token = signPlayerToken(
+    {
+      sub: body.userId,
+      app: app.app_key || app.package_name,
+      username: body.username,
+      avatarUrl: body.avatarUrl || undefined,
+    },
+    secret,
+    15 * 60,
+  );
+
+  const fallbackGame = GAME_DEFINITIONS[0]!;
+  const matchedGame = GAME_DEFINITIONS.find((g) => g.gameKey === body.game) || fallbackGame;
+  const url = new URL(matchedGame.path, `${config.game_frontend_url}/`);
+  url.searchParams.set('token', token);
+  url.searchParams.set('app', app.app_key || app.package_name);
+  url.searchParams.set('game', matchedGame.gameKey);
+
+  return {
+    launch_url: url.toString(),
+    token,
+    app_key: app.app_key || app.package_name,
+    game: matchedGame.gameKey,
+  };
+};
+
+const syncBalance = async (body: SyncBalanceBody) => {
+  const balance = await syncSeamlessUserBalance(body.userId);
+  return {
+    user_id: body.userId,
+    balance: balance.toString(),
+    currency: DEFAULT_CURRENCY_CODE,
+  };
+};
+
 const PlatformIntegrationService = {
   syncPlatformUser,
   getPlatformUserCoins,
@@ -522,6 +753,11 @@ const PlatformIntegrationService = {
   withdrawPlatformUserCoins,
   launchPlatformUser,
   buildLaunchUrl,
+  findPlatformAppByIdentifier,
+  getGameCatalog,
+  verifySession,
+  launchGame,
+  syncBalance,
 };
 
 export default PlatformIntegrationService;

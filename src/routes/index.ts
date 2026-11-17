@@ -35,6 +35,13 @@ router.get('/health/ready', async (_req, res, next) => {
   }
 });
 
+router.get('/games', (req, res, next) => {
+  if (req.query.app || req.query.appKey) {
+    return PlatformIntegrationRoutes(req, res, next);
+  }
+  next();
+});
+
 router.use('/games/greedy', GreedyRoutes);
 router.use('/games/teen-patti', TeenPattiRoutes);
 router.use('/games/lucky-77', Lucky77Routes);

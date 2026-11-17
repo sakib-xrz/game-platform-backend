@@ -9,7 +9,7 @@ export const HouseProfitAdminRoutes = express.Router();
 
 HouseProfitAdminRoutes.use(adminAuth, adminPasswordGate);
 
-// Get Tecsior-style Overview & P&L metrics
+// Get House Profit Overview & P&L metrics
 HouseProfitAdminRoutes.get(
   '/overview',
   requireAdminPermission('game.read'),

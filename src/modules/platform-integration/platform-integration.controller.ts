@@ -93,12 +93,60 @@ const withdrawPlatformUserCoins = catchAsync(async (req: Request, res: Response)
   });
 });
 
+const getGameCatalog = catchAsync(async (req: Request, res: Response) => {
+  const appIdentifier = String(req.query.app || req.query.appKey || '').trim();
+  if (!appIdentifier) {
+    throw new AppError(httpStatus.BAD_REQUEST, 'Query param "app" is required');
+  }
+  const data = await PlatformIntegrationService.getGameCatalog(appIdentifier);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Game catalog retrieved',
+    data,
+  });
+});
+
+const verifySession = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformIntegrationService.verifySession(req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Session verified successfully',
+    data,
+  });
+});
+
+const launchGame = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformIntegrationService.launchGame(req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Game launch URL generated',
+    data,
+  });
+});
+
+const syncBalance = catchAsync(async (req: Request, res: Response) => {
+  const data = await PlatformIntegrationService.syncBalance(req.body);
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Wallet balance synchronized',
+    data,
+  });
+});
+
 const PlatformIntegrationController = {
   syncPlatformUser,
   creditPlatformUserCoins,
   withdrawPlatformUserCoins,
   getPlatformUserCoins,
   launchPlatformUser,
+  getGameCatalog,
+  verifySession,
+  launchGame,
+  syncBalance,
 };
 
 export default PlatformIntegrationController;

@@ -12,6 +12,7 @@ import {
   WalletInitializationRequiredError,
   withWalletInitializationRetry,
 } from '@/modules/wallet/wallet.services';
+import { processSeamlessBetDebit } from '@/modules/platform-integration/seamless-wallet.services';
 import {
   attachUserId,
   isBotUserId,
@@ -638,68 +639,22 @@ const placeBetTransaction = async (
     let ledger_id: string | null = null;
 
     if (!bot_bet) {
-      const wallet_rows = await tx.$queryRaw<
-        Array<{
-          id: string;
-          balance_before: bigint;
-          balance_after: bigint;
-          version: number;
-        }>
-      >(Prisma.sql`
-        UPDATE wallets AS wallet
-        SET
-          balance = wallet.balance - ${amount},
-          version = wallet.version + 1,
-          updated_at = CURRENT_TIMESTAMP
-        FROM currencies AS currency
-        WHERE wallet.user_id = ${user_id}
-          AND wallet.currency_id = currency.id
-          AND currency.code = ${GREEDY_CLASSIC_CURRENCY_CODE}
-          AND currency.is_active = TRUE
-          AND wallet.balance >= ${amount}
-        RETURNING
-          wallet.id,
-          wallet.balance + ${amount} AS balance_before,
-          wallet.balance AS balance_after,
-          wallet.version
-      `);
-      debited_wallet = wallet_rows[0] ?? null;
-      if (!debited_wallet) {
-        const wallet = await tx.wallet.findFirst({
-          where: {
-            user_id,
-            currency: { code: GREEDY_CLASSIC_CURRENCY_CODE, is_active: true },
-          },
-          select: { balance: true },
-        });
-        if (!wallet) throw new WalletInitializationRequiredError();
-        if (wallet.balance >= amount) {
-          throw new AppError(
-            httpStatus.CONFLICT,
-            'Wallet balance changed; retry the bet',
-          );
-        }
-        throw new AppError(
-          httpStatus.BAD_REQUEST,
-          'Insufficient wallet balance',
-        );
-      }
-
-      const ledger = await tx.walletLedger.create({
-        data: {
-          wallet_id: debited_wallet.id,
-          user_id,
-          game_id: barrier.game_id,
-          type: WalletLedgerType.bet_debit,
-          amount: -amount,
-          balance_before: debited_wallet.balance_before,
-          balance_after: debited_wallet.balance_after,
-          reference_type: 'greedy_classic_bet',
-          reference_id: bet_id,
-          idempotency_key: payload.client_request_id,
-        },
+      const debitResult = await processSeamlessBetDebit(tx, {
+        userId: user_id,
+        amount,
+        betId: bet_id,
+        gameId: barrier.game_id,
+        gameCode: GREEDY_CLASSIC_GAME_CODE,
+        roundId: barrier.id,
+        clientRequestId: payload.client_request_id,
       });
-      ledger_id = ledger.id;
+      debited_wallet = {
+        id: debitResult.walletId,
+        balance_before: debitResult.balanceBefore,
+        balance_after: debitResult.balanceAfter,
+        version: debitResult.version,
+      };
+      ledger_id = debitResult.ledgerId;
     }
 
     const bet = await tx.greedyClassicBet.create({

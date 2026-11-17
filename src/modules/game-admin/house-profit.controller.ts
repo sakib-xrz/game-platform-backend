@@ -12,7 +12,7 @@ import { logger } from '@/utils/logger';
 
 export class HouseProfitAdminController {
   /**
-   * Get comprehensive overview similar to Tecsior Operator Console:
+   * Get comprehensive overview of Operator Console:
    * - High-level summary (today, rolling 7 days, 30 days)
    * - By-game performance breakdown
    * - Daily historical chart data (with green/red profit flags)
