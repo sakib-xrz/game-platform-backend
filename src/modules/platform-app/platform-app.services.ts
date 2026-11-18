@@ -285,7 +285,7 @@ const testWalletIntegration = async (app_id: string, test_user_id?: string) => {
   const app = await findPlatformAppOrThrow(app_id);
   return SeamlessWalletClient.testRemoteWalletIntegration(
     app,
-    test_user_id || 'test_user_001',
+    test_user_id || '1',
   );
 };
 
@@ -316,7 +316,9 @@ const generateTestLaunchUrl = async (
         ? '/games/greedy-classic'
         : game === 'lucky-77'
           ? '/games/lucky-77'
-          : '/';
+          : game === 'greedy'
+            ? '/games/greedy'
+            : '/games/monk-wheel';
 
   const url = new URL(path, `${config.game_frontend_url}/`);
   url.searchParams.set('token', token);

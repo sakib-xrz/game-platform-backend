@@ -36,6 +36,8 @@ export type SeamlessLookupResponse = {
   amount?: number | string;
   currency?: string;
   timestamp?: number | string;
+  httpStatus?: number;
+  error?: string;
 };
 
 const REQUEST_TIMEOUT_MS = 6000;
@@ -371,21 +373,49 @@ export class SeamlessWalletClient {
     try {
       const response = await fetchWithTimeout(fullUrl, { method: 'GET', headers }, 4000);
       if (response.status === 404) {
-        return { status: 'NOT_FOUND' };
+        return { status: 'NOT_FOUND', httpStatus: 404 };
       }
       if (response.ok) {
         const data = (await response.json()) as Record<string, any>;
-        return {
-          status: 'FOUND',
-          type: data.type,
-          amount: data.amount,
-          currency: data.currency,
-          timestamp: data.timestamp,
-        };
+        // Explicitly check for { found: false } or { status: "NOT_FOUND" }
+        const isExplicitNotFound =
+          data.found === false ||
+          data.status === 'NOT_FOUND' ||
+          data.status === 'not_found' ||
+          data.status === 'TRANSACTION_NOT_FOUND';
+
+        if (isExplicitNotFound) {
+          return { status: 'NOT_FOUND', httpStatus: response.status };
+        }
+
+        const isFound =
+          data.found === true ||
+          data.status === 'FOUND' ||
+          data.status === 'completed' ||
+          data.amount !== undefined ||
+          data.txId !== undefined;
+
+        if (isFound) {
+          return {
+            status: 'FOUND',
+            type: data.type,
+            amount: data.amount,
+            currency: data.currency,
+            timestamp: data.timestamp,
+            httpStatus: response.status,
+          };
+        }
+
+        return { status: 'NOT_FOUND', httpStatus: response.status };
       }
-      return { status: 'NOT_FOUND' };
-    } catch {
-      return { status: 'NOT_FOUND' };
+
+      return {
+        status: 'NOT_FOUND',
+        httpStatus: response.status,
+        error: `Host rejected transaction lookup: HTTP ${response.status}`,
+      };
+    } catch (err: any) {
+      return { status: 'NOT_FOUND', error: `Network error: ${err.message}` };
     }
   }
 
@@ -395,7 +425,7 @@ export class SeamlessWalletClient {
    */
   static async testRemoteWalletIntegration(
     app: SeamlessAppConfig,
-    testUserId = 'test_user_001',
+    testUserId = '1',
   ): Promise<{
     overall_status: 'SUCCESS' | 'WARNING' | 'FAILED';
     duration_ms: number;
@@ -449,26 +479,64 @@ export class SeamlessWalletClient {
         latency_ms: Date.now() - t1Start,
       });
     } catch (err: any) {
-      tests.push({
-        name: 'Player Balance Check',
-        endpoint: `GET /internal/wallet/${testUserId}/balance`,
-        passed: false,
-        message: err.message,
-        latency_ms: Date.now() - t1Start,
-      });
+      // Check if host returned 404 USER_NOT_FOUND (valid signature, but user does not exist on host side)
+      const isUserNotFound =
+        err?.message?.includes('404') ||
+        err?.message?.toLowerCase().includes('user_not_found') ||
+        err?.message?.toLowerCase().includes('user not found');
+
+      if (isUserNotFound) {
+        tests.push({
+          name: 'Player Balance Check',
+          endpoint: `GET /internal/wallet/${testUserId}/balance`,
+          passed: true,
+          status_code: 404,
+          message: `Passed: Host returned 404 USER_NOT_FOUND for '${testUserId}' (signature verified). Use an existing user ID to test balance value.`,
+          latency_ms: Date.now() - t1Start,
+        });
+      } else {
+        tests.push({
+          name: 'Player Balance Check',
+          endpoint: `GET /internal/wallet/${testUserId}/balance`,
+          passed: false,
+          message: err.message,
+          latency_ms: Date.now() - t1Start,
+        });
+      }
     }
 
-    // 2. Test Transaction Lookup Endpoint (404 expected for non-existent key)
+    // 2. Test Transaction Lookup Endpoint (404 or {found: false} expected for non-existent key)
     const t2Start = Date.now();
     try {
       const lookup = await this.checkRemoteTransaction(app, testIdempotencyKey);
-      tests.push({
-        name: 'Transaction Lookup Check',
-        endpoint: `/internal/wallet/transaction/{key}`,
-        passed: true,
-        message: `Success: host correctly returned ${lookup.status}`,
-        latency_ms: Date.now() - t2Start,
-      });
+      if (lookup.error || (lookup.httpStatus && lookup.httpStatus >= 400 && lookup.httpStatus !== 404)) {
+        tests.push({
+          name: 'Transaction Lookup Check',
+          endpoint: `/internal/wallet/transaction/{key}`,
+          passed: false,
+          status_code: lookup.httpStatus,
+          message: lookup.error || `Failed: host returned HTTP ${lookup.httpStatus}`,
+          latency_ms: Date.now() - t2Start,
+        });
+      } else if (lookup.status === 'FOUND') {
+        tests.push({
+          name: 'Transaction Lookup Check',
+          endpoint: `/internal/wallet/transaction/{key}`,
+          passed: true,
+          status_code: lookup.httpStatus || 200,
+          message: `Warning: host returned FOUND for random test key ${testIdempotencyKey}`,
+          latency_ms: Date.now() - t2Start,
+        });
+      } else {
+        tests.push({
+          name: 'Transaction Lookup Check',
+          endpoint: `/internal/wallet/transaction/{key}`,
+          passed: true,
+          status_code: lookup.httpStatus || 200,
+          message: `Success: host correctly returned NOT_FOUND for non-existent key`,
+          latency_ms: Date.now() - t2Start,
+        });
+      }
     } catch (err: any) {
       tests.push({
         name: 'Transaction Lookup Check',

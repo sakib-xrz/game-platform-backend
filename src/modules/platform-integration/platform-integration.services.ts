@@ -553,7 +553,7 @@ const GAME_DEFINITIONS = [
     gameKey: 'monk-wheel',
     name: 'Monk Wheel',
     description: 'High-octane wheel of fortune with up to 20x multipliers and jackpot bonuses.',
-    path: '/',
+    path: '/games/monk-wheel',
     iconUrl: `${config.game_frontend_url}/icons/monk-wheel.png`,
   },
   {
