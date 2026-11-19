@@ -20,6 +20,13 @@ import {
 import { signPlayerToken, verifyPlayerToken } from '@/utils/player-token';
 import { SeamlessWalletClient } from './seamless-wallet.client';
 import { syncSeamlessUserBalance } from './seamless-wallet.services';
+import {
+  findPlatformAppByIdentifier,
+  playerTokenSecrets,
+  readUnverifiedAppClaim,
+  upsertPlatformPlayer,
+} from './player-identity.services';
+import { logger } from '@/utils/logger';
 import type {
   AppCredentials,
   CreditPlatformUserCoinsBody,
@@ -522,31 +529,7 @@ const withdrawPlatformUserCoins = async (
   );
 };
 
-export const findPlatformAppByIdentifier = async (identifier: string) => {
-  const trimmed = identifier.trim();
-  const app = await prisma.platformApp.findFirst({
-    where: {
-      OR: [
-        { app_key: trimmed },
-        { package_name: trimmed },
-        { id: trimmed },
-      ],
-    },
-  });
-
-  if (!app) {
-    throw new AppError(
-      httpStatus.NOT_FOUND,
-      `Platform app not found for identifier "${identifier}"`,
-    );
-  }
-
-  if (app.status !== PlatformAppStatus.active) {
-    throw new AppError(httpStatus.FORBIDDEN, 'Platform app is disabled');
-  }
-
-  return app;
-};
+export { findPlatformAppByIdentifier };
 
 const GAME_DEFINITIONS = [
   {
@@ -605,21 +588,8 @@ const getGameCatalog = async (appIdentifier: string) => {
 const verifySession = async (body: VerifySessionBody) => {
   const { token, appKey } = body;
 
-  // 1. Decode JWT payload unverified to discover target app if appKey is not passed
-  let targetAppIdentifier = appKey;
-  if (!targetAppIdentifier) {
-    try {
-      const parts = token.split('.');
-      if (parts.length === 3 && parts[1]) {
-        let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        while (base64.length % 4) base64 += '=';
-        const claims = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'));
-        targetAppIdentifier = claims.app;
-      }
-    } catch {
-      // Handled below
-    }
-  }
+  // 1. Discover the target app from the token when appKey is not passed
+  const targetAppIdentifier = appKey || readUnverifiedAppClaim(token);
 
   if (!targetAppIdentifier) {
     throw new AppError(
@@ -630,14 +600,8 @@ const verifySession = async (body: VerifySessionBody) => {
 
   const app = await findPlatformAppByIdentifier(targetAppIdentifier);
 
-  // 2. Validate token against configured secrets
-  const secrets = [
-    app.player_token_secret,
-    app.signing_secret,
-    app.signing_secret_previous,
-  ].filter(Boolean) as string[];
-
-  const verification = verifyPlayerToken(token, secrets);
+  // 2. Validate token against configured secrets (fresh launch: no grace)
+  const verification = verifyPlayerToken(token, playerTokenSecrets(app));
   if (!verification.valid || !verification.claims) {
     throw new AppError(
       httpStatus.UNAUTHORIZED,
@@ -645,34 +609,10 @@ const verifySession = async (body: VerifySessionBody) => {
     );
   }
 
-  const claims = verification.claims;
-  const externalUserId = claims.sub.trim();
-  const displayName = claims.username?.trim() || `Player ${externalUserId.slice(-4)}`;
-  const photoUrl = claims.avatarUrl?.trim() || null;
-  const email = `${externalUserId}@${app.package_name}.platform`.toLowerCase();
+  const externalUserId = verification.claims.sub.trim();
 
-  // 3. Upsert PlatformUser record
-  const user = await prisma.platformUser.upsert({
-    where: {
-      platform_app_id_external_user_id: {
-        platform_app_id: app.id,
-        external_user_id: externalUserId,
-      },
-    },
-    update: {
-      display_name: displayName,
-      photo_url: photoUrl,
-      status: PlatformUserStatus.active,
-    },
-    create: {
-      platform_app_id: app.id,
-      external_user_id: externalUserId,
-      email,
-      display_name: displayName,
-      photo_url: photoUrl,
-      status: PlatformUserStatus.active,
-    },
-  });
+  // 3. Upsert PlatformUser record (shared with per-request token resolution)
+  const { user } = await upsertPlatformPlayer(app, verification.claims);
 
   // 4. Ensure wallet & sync balance
   let balance = 0n;
@@ -685,7 +625,13 @@ const verifySession = async (body: VerifySessionBody) => {
         data: { balance, version: { increment: 1 } },
       });
     } catch (err: any) {
-      // In case host app is unreachable during boot, fallback to cached wallet balance
+      // Host app unreachable during boot: fall back to the cached wallet
+      // balance, but make the failure visible instead of silently showing it.
+      logger.error('seamless_launch_balance_fetch_failed', {
+        app_id: app.id,
+        platform_user_id: user.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
       const wallet = await ensureWallet(user.id);
       balance = wallet.balance;
     }

@@ -2,6 +2,7 @@ import { Server as HttpServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-streams-adapter';
 import config from '@/config';
+import { resolvePlayerIdentity } from '@/middlewares/player-context';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import { logger } from '@/utils/logger';
 
@@ -27,11 +28,23 @@ export const initializeSocket = (http_server: HttpServer): Server => {
     socket.join('game:lucky-77');
     socket.join('game:greedy-classic');
 
-    const dev_user_id = config.allow_dev_identity_header
-      ? String(socket.handshake.auth?.user_id || '').trim()
-      : '';
-
-    if (dev_user_id) socket.join(`user:${dev_user_id}`);
+    // Same identity rules as HTTP requests: host-signed token first (mapped
+    // to the internal player id), legacy user_id only for non-host players.
+    const auth = socket.handshake.auth ?? {};
+    resolvePlayerIdentity({
+      token: typeof auth.token === 'string' ? auth.token : undefined,
+      appKey: typeof auth.app === 'string' ? auth.app : undefined,
+      headerUserId: typeof auth.user_id === 'string' ? auth.user_id : undefined,
+    })
+      .then((user_id) => {
+        if (user_id && socket.connected) socket.join(`user:${user_id}`);
+      })
+      .catch((err) => {
+        logger.debug('socket_identity_rejected', {
+          socket_id: socket.id,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      });
 
     socket.emit('platform.connected', {
       socket_id: socket.id,

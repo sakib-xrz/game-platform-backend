@@ -45,6 +45,12 @@ const config = {
   admin_api_key: process.env.ADMIN_API_KEY || '',
   allow_dev_identity_header:
     (process.env.ALLOW_DEV_IDENTITY_HEADER || 'false').toLowerCase() === 'true',
+  // How long after its 15-minute expiry a host-signed player token may still
+  // identify the player of an already-open game session (default 24h).
+  player_token_session_grace_seconds: parsePositiveInt(
+    process.env.PLAYER_TOKEN_SESSION_GRACE_SECONDS,
+    24 * 60 * 60,
+  ),
   worker_instance_id:
     process.env.WORKER_INSTANCE_ID || `greedy-worker-${process.pid}`,
   worker_health_port: parsePositiveInt(

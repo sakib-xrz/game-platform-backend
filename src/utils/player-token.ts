@@ -73,6 +73,14 @@ export const generatePlayerToken = signPlayerToken;
 export function verifyPlayerToken(
   token: string,
   secretOrSecrets: string | string[],
+  options: {
+    /**
+     * Accept a correctly signed token for this many seconds after `exp`.
+     * Used only to keep identifying a player during an already-open game
+     * session (launch tokens live 15 minutes, play sessions can be longer).
+     */
+    expiredGraceSeconds?: number;
+  } = {},
 ): { valid: boolean; claims?: PlayerTokenClaims; reason?: string } {
   if (!token || typeof token !== 'string') {
     return { valid: false, reason: 'Token is missing or not a string' };
@@ -107,7 +115,8 @@ export function verifyPlayerToken(
     const now = Math.floor(Date.now() / 1000);
 
     // Expiry check
-    if (typeof payload.exp !== 'number' || payload.exp < now) {
+    const grace = Math.max(0, options.expiredGraceSeconds ?? 0);
+    if (typeof payload.exp !== 'number' || payload.exp + grace < now) {
       return { valid: false, reason: 'Token has expired' };
     }
 

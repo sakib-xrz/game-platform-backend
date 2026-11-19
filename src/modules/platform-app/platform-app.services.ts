@@ -295,8 +295,11 @@ const generateTestLaunchUrl = async (
 ) => {
   const app = await findPlatformAppOrThrow(app_id);
   const secret = app.player_token_secret || app.signing_secret;
-  const userId = options.user_id || 'test_player_1';
-  const username = options.username || 'Test Player';
+  // Admin-chosen host user id (e.g. "3") so a specific player can be
+  // launched and tested end to end; trimmed and bounded like real launches.
+  const userId = String(options.user_id ?? '').trim().slice(0, 128) || 'test_player_1';
+  const username =
+    String(options.username ?? '').trim().slice(0, 64) || `Test Player ${userId}`;
 
   const token = signPlayerToken(
     {
