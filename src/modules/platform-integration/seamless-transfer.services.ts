@@ -8,7 +8,8 @@ import {
   SeamlessTransferStatus,
 } from '@/generated/prisma/client';
 import { logger } from '@/utils/logger';
-import { SeamlessWalletClient } from './seamless-wallet.client';
+import { ensureWallet } from '@/modules/wallet/wallet.services';
+import { SeamlessAppConfig, SeamlessWalletClient } from './seamless-wallet.client';
 
 /**
  * Durable journal for every coin movement against a seamless (host) wallet.
@@ -162,6 +163,46 @@ const raiseStuckCreditAlert = async (row: TransferRow, error: string) => {
   });
 };
 
+/**
+ * The local wallet of a seamless player is a mirror of the host balance.
+ * Refresh it from the host (source of truth) and push the new balance to the
+ * player's socket so the game UI and admin panel show the credited coins.
+ */
+export async function refreshSeamlessMirrorBalance(
+  app: SeamlessAppConfig,
+  user_id: string,
+  external_user_id: string,
+  reason: string,
+): Promise<bigint | null> {
+  try {
+    const balance = await SeamlessWalletClient.getRemoteBalance(app, external_user_id);
+    const wallet = await ensureWallet(user_id);
+    const updated = await prisma.wallet.update({
+      where: { id: wallet.id },
+      data: { balance, version: { increment: 1 } },
+    });
+    await prisma.outboxEvent.create({
+      data: {
+        aggregate_type: 'wallet',
+        aggregate_id: wallet.id,
+        event_type: 'wallet.balance.updated',
+        socket_room: `user:${user_id}`,
+        payload: {
+          wallet_id: wallet.id,
+          balance: balance.toString(),
+          wallet_version: updated.version,
+          reason,
+        },
+      },
+    });
+    return balance;
+  } catch (error) {
+    // Display-only mirror: the next player request re-syncs it anyway.
+    logger.warn('seamless_mirror_refresh_failed', { user_id, error });
+    return null;
+  }
+}
+
 const deliverCredit = async (row: TransferRow): Promise<boolean> => {
   try {
     const app = await prisma.platformApp.findUnique({
@@ -204,6 +245,12 @@ const deliverCredit = async (row: TransferRow): Promise<boolean> => {
         last_error: null,
       },
     });
+    await refreshSeamlessMirrorBalance(
+      app,
+      row.user_id,
+      row.external_user_id,
+      row.type === 'game_payout' ? 'seamless_payout' : 'seamless_refund',
+    );
     logger.info('seamless_credit_delivered', {
       idempotency_key: row.idempotency_key,
       amount: row.amount.toString(),
