@@ -78,7 +78,7 @@ export const applyPlayerRiskAfterRound = async (
     const is_jackpot =
       input.multiplier >= input.policy.jackpot_multiplier_threshold;
     const is_big_win =
-      input.multiplier >= 10 || input.payout >= input.policy.max_human_payout_per_round / 2n;
+      input.multiplier >= 15 || input.payout >= input.policy.max_human_payout_per_round / 2n;
 
     if (is_jackpot) {
       cooling_remaining = Math.max(

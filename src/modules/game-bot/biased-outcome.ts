@@ -97,7 +97,7 @@ const humanNetWin = (
   return payout - human_stake_total;
 };
 
-const clampRate = (rate: number, fallback = 0.015): number => {
+const clampRate = (rate: number, fallback = 0.40): number => {
   if (!Number.isFinite(rate)) return fallback;
   if (rate < 0) return 0;
   if (rate > 1) return 1;
@@ -268,7 +268,7 @@ export const pickBiasedWinner = (input: PickBiasedWinnerInput): PickBiasedWinner
   const non_forbidden = input.options.filter((option) => !isForbidden(option));
   const fallback_pool = non_forbidden.length ? non_forbidden : input.options;
 
-  const rate = clampRate(input.target_human_win_rate, 0.015);
+  const rate = clampRate(input.target_human_win_rate, 0.40);
   const allowance_roll = rollUnitInterval();
   const pick_from_human = allowance_roll.value < rate && human_options.length > 0;
 

@@ -16,10 +16,6 @@ describe('Profit Steering Engine (60:40 Company vs Player)', () => {
   ];
 
   it('enforces 60% company profit / 40% player RTP on standard rounds', async () => {
-    // Total human stake = 10,000.
-    // 40% max payout = 4,000.
-    // Bet on apple = 5,000 (pays 10,000 > 4,000 => rejected).
-    // Bet on empty = 0 (pays 0 <= 4,000 => allowed).
     const bets: BiasedBetStake[] = [
       { user_id: 'human_1', option_id: 'opt_apple', amount: 5000n, is_bot: false },
       { user_id: 'human_2', option_id: 'opt_banana', amount: 5000n, is_bot: false },
@@ -33,9 +29,44 @@ describe('Profit Steering Engine (60:40 Company vs Player)', () => {
     });
 
     expect(decision.mode).toBe('TARGET_60_40_ENFORCED');
+    expect(decision.target_human_win_rate).toBeGreaterThanOrEqual(0.20);
+    expect(decision.target_human_win_rate).toBeLessThanOrEqual(0.60);
+    expect(decision.allowed_option_ids).toContain('opt_apple');
+    expect(decision.allowed_option_ids).toContain('opt_banana');
     expect(decision.allowed_option_ids).toContain('opt_empty');
-    expect(decision.allowed_option_ids).not.toContain('opt_apple');
-    expect(decision.allowed_option_ids).not.toContain('opt_banana');
+  });
+
+  it('triggers GIVE_BACK_BOOST when players are net losers', async () => {
+    vi.spyOn(prisma.gamePlayerRiskState, 'findMany').mockResolvedValueOnce([
+      {
+        user_id: 'losing_human',
+        cooling_remaining: 0,
+        win_streak: 0,
+        jackpot_cooldown_remaining: 0,
+        lifetime_wagered: 100_000n,
+        lifetime_payout: 20_000n,
+        lifetime_net_profit: -80_000n, // Net loser!
+        rolling_8d_wagered: 100_000n,
+        rolling_8d_payout: 20_000n,
+        rolling_8d_net_profit: -80_000n,
+        created_at: new Date(),
+        updated_at: new Date(),
+      } as any,
+    ]);
+
+    const bets: BiasedBetStake[] = [
+      { user_id: 'losing_human', option_id: 'opt_apple', amount: 1000n, is_bot: false },
+    ];
+
+    const decision = await evaluateHouseProfitSteering({
+      game_code: 'greedy',
+      options,
+      bets,
+    });
+
+    expect(decision.mode).toBe('GIVE_BACK_BOOST');
+    expect(decision.target_human_win_rate).toBeGreaterThanOrEqual(0.50);
+    expect(decision.allowed_option_ids).toContain('opt_apple');
   });
 
   it('triggers CIRCUIT_BREAKER_EMERGENCY when daily loss limit is hit', async () => {

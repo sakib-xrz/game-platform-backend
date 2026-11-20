@@ -49,7 +49,10 @@ export const selectRoundWinner = async (
   return pickBiasedWinner({
     options: optionsToUse,
     bets: input.bets,
-    target_human_win_rate: input.policy.target_human_win_rate,
+    target_human_win_rate:
+      typeof steering.target_human_win_rate === 'number'
+        ? steering.target_human_win_rate
+        : input.policy.target_human_win_rate,
     min_human_bets_before_bias: input.policy.min_human_bets_before_bias,
     max_human_payout_per_round: effectiveMaxPayout,
     cooling_user_ids: risk.cooling_user_ids,

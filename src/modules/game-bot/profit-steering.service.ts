@@ -314,6 +314,7 @@ export type SteeringDecision = {
     | 'NATURAL_BALANCED';
   allowed_option_ids: string[];
   max_allowed_human_payout: bigint;
+  target_human_win_rate: number;
   reason: string;
 };
 
@@ -349,6 +350,7 @@ export const evaluateHouseProfitSteering = async (input: {
       mode: 'NATURAL_BALANCED',
       allowed_option_ids: input.options.map((o) => o.id),
       max_allowed_human_payout: 0n,
+      target_human_win_rate: 0.40,
       reason: 'No human bets in this round',
     };
   }
@@ -388,6 +390,7 @@ export const evaluateHouseProfitSteering = async (input: {
       mode: 'CIRCUIT_BREAKER_EMERGENCY',
       allowed_option_ids: optionsToUse.map((o) => o.id),
       max_allowed_human_payout: 0n,
+      target_human_win_rate: 0,
       reason: `Daily loss cap of ${config.max_daily_loss_coins} reached (current profit: ${todayStat.house_profit})`,
     };
   }
@@ -409,6 +412,7 @@ export const evaluateHouseProfitSteering = async (input: {
       mode: 'WEEKLY_GUARANTEE_RECOVERY',
       allowed_option_ids: optionsToUse.map((o) => o.id),
       max_allowed_human_payout: max_recovery_payout,
+      target_human_win_rate: 0.15,
       reason: `Weekly profit margin (${weeklyStat.house_kept_pct.toFixed(1)}%) below target ${config.min_weekly_profit_pct}%`,
     };
   }
@@ -438,78 +442,106 @@ export const evaluateHouseProfitSteering = async (input: {
         mode: 'ANTI_PROFIT_EXIT_BLOCKED',
         allowed_option_ids: safeOptions.map((o) => o.id),
         max_allowed_human_payout: 0n,
+        target_human_win_rate: 0,
         reason: 'Blocked options where lifetime profitable users would win',
       };
     }
   }
 
-  // 4. GIVE-BACK TO NET LOSERS (Player Retention Boost)
-  // Active only if today's house is in surplus (profit % > target)
-  const isSurplus =
-    todayStat.total_wagered > 50_000n &&
-    todayStat.house_kept_pct >= config.target_house_profit_pct + 10;
-
-  if (isSurplus) {
-    // Check if players have 8-day net losses
-    const eligibleLosers = human_ids.filter((uid) => {
-      const state = playerStateMap.get(uid);
-      return state && state.rolling_8d_net_profit < 0n && state.lifetime_net_profit < 0n;
-    });
-
-    if (eligibleLosers.length > 0) {
-      // Allow winning options for eligible losers up to target RTP + give_back_lost_pct
-      const max_boosted_payout =
-        (total_human_stake * BigInt(Math.round(config.target_player_rtp_pct + config.give_back_lost_pct))) /
-        100n;
-
-      const boostedOptions = input.options.filter(
-        (o) => (optionPayoutMap.get(o.id) ?? 0n) <= max_boosted_payout,
-      );
-
-      if (boostedOptions.length > 0) {
-        return {
-          mode: 'GIVE_BACK_BOOST',
-          allowed_option_ids: boostedOptions.map((o) => o.id),
-          max_allowed_human_payout: max_boosted_payout,
-          reason: 'Surplus profit give-back applied to retaining net losers',
-        };
-      }
+  // Calculate human options and average payout multiplier
+  let totalHumanOptionPayout = 0n;
+  let humanOptionCount = 0;
+  for (const option of input.options) {
+    const payout = optionPayoutMap.get(option.id) ?? 0n;
+    if (payout > 0n) {
+      totalHumanOptionPayout += payout;
+      humanOptionCount += 1;
     }
   }
 
-  // 5. NORMAL 60:40 TARGET ENFORCEMENT
-  // Maximum payout allowed to players is 40% of the wagered pool (Company retains >= 60%)
-  const max_target_payout =
-    (total_human_stake * BigInt(Math.round(config.target_player_rtp_pct))) / 100n;
+  // Effective multiplier when human wins (payout / stake)
+  const avgMultiplier =
+    humanOptionCount > 0 && total_human_stake > 0n
+      ? Math.max(
+          1.0,
+          Number(totalHumanOptionPayout / BigInt(humanOptionCount)) /
+            Number(total_human_stake),
+        )
+      : 2.5;
 
-  const validOptions = input.options.filter(
-    (o) => (optionPayoutMap.get(o.id) ?? 0n) <= max_target_payout,
-  );
+  // 4. GIVE-BACK TO NET LOSERS & SURPLUS RETENTION BOOST
+  // Active when house is in profit surplus (profit % >= target) OR players in this round have net losses
+  const netLoserIds = new Set<string>();
+  for (const uid of human_ids) {
+    const state = playerStateMap.get(uid);
+    if (state && (state.lifetime_net_profit < 0n || state.rolling_8d_net_profit < 0n)) {
+      netLoserIds.add(uid);
+    }
+  }
 
-  if (validOptions.length > 0) {
+  const isSurplus =
+    todayStat.total_wagered > 0n &&
+    todayStat.house_kept_pct >= config.target_house_profit_pct;
+
+  if (isSurplus || netLoserIds.size > 0) {
+    // Dynamic boosted RTP target: base target + surplus share + give_back_lost_pct
+    let dynamicRtp = config.target_player_rtp_pct / 100; // 0.40
+    if (isSurplus) {
+      const surplusMargin = todayStat.house_kept_pct - config.target_house_profit_pct;
+      dynamicRtp += Math.min(0.30, (surplusMargin / 100) * 0.45);
+    }
+    if (netLoserIds.size > 0) {
+      dynamicRtp += config.give_back_lost_pct / 100;
+    }
+    const finalRtp = Math.min(0.80, Math.max(0.40, dynamicRtp));
+
+    // Win rate = RTP / effective multiplier
+    const finalRate = Math.min(0.75, Math.max(0.12, finalRtp / avgMultiplier));
+
+    const max_cap = config.max_daily_loss_coins / 10n;
+    const safeOptions = input.options.filter(
+      (o) => (optionPayoutMap.get(o.id) ?? 0n) <= max_cap,
+    );
+    const optionsToUse = safeOptions.length ? safeOptions : input.options;
+
     return {
-      mode: 'TARGET_60_40_ENFORCED',
-      allowed_option_ids: validOptions.map((o) => o.id),
-      max_allowed_human_payout: max_target_payout,
-      reason: `Company retains >= ${config.target_house_profit_pct}%, max payout ${max_target_payout}`,
+      mode: 'GIVE_BACK_BOOST',
+      allowed_option_ids: optionsToUse.map((o) => o.id),
+      max_allowed_human_payout: max_cap,
+      target_human_win_rate: finalRate,
+      reason: `Surplus profit / net loser give-back active (target RTP: ${(finalRtp * 100).toFixed(0)}%, win rate: ${(finalRate * 100).toFixed(1)}%, house kept: ${todayStat.house_kept_pct.toFixed(1)}%)`,
     };
   }
 
-  // Fallback: pick the option with the absolute lowest human payout
-  let lowestPayout = optionPayoutMap.get(input.options[0]?.id ?? '') ?? 0n;
-  for (const opt of input.options) {
-    const p = optionPayoutMap.get(opt.id) ?? 0n;
-    if (p < lowestPayout) lowestPayout = p;
+  // 5. NORMAL 60:40 TARGET BALANCING
+  // Dynamic closed-loop RTP controller
+  let targetRtp = config.target_player_rtp_pct / 100; // 0.40
+  if (todayStat.total_wagered > 10_000n) {
+    const error = todayStat.house_kept_pct - config.target_house_profit_pct;
+    // Error > 0: house in surplus -> increase RTP
+    // Error < 0: house under target -> decrease RTP
+    targetRtp += (error / 100) * 0.35;
   }
-  const lowestOptions = input.options.filter(
-    (o) => (optionPayoutMap.get(o.id) ?? 0n) === lowestPayout,
+  const clampedRtp = Math.min(0.60, Math.max(0.20, targetRtp));
+
+  // Win rate = RTP / effective multiplier
+  const clampedWinRate = Math.min(
+    0.65,
+    Math.max(0.08, clampedRtp / avgMultiplier),
   );
+
+  const max_cap = config.max_daily_loss_coins / 10n;
+  const safeOptions = input.options.filter(
+    (o) => (optionPayoutMap.get(o.id) ?? 0n) <= max_cap,
+  );
+  const optionsToUse = safeOptions.length ? safeOptions : input.options;
 
   return {
     mode: 'TARGET_60_40_ENFORCED',
-    allowed_option_ids: lowestOptions.map((o) => o.id),
-    max_allowed_human_payout: lowestPayout,
-    reason: 'Forced lowest human payout to preserve 60% house target',
+    allowed_option_ids: optionsToUse.map((o) => o.id),
+    max_allowed_human_payout: max_cap,
+    target_human_win_rate: clampedWinRate,
+    reason: `Target 60:40 enforced with dynamic ${(clampedWinRate * 100).toFixed(1)}% win rate (target RTP: ${(clampedRtp * 100).toFixed(0)}%, avg mult: ${avgMultiplier.toFixed(1)}x)`,
   };
 };
 
@@ -536,6 +568,7 @@ export const selectRoundWinnerWithProfitSteering = async (input: {
     mode: steering.mode,
     reason: steering.reason,
     allowedCount: steering.allowed_option_ids.length,
+    winRate: steering.target_human_win_rate,
   });
 
   // 2. Filter options by steering decision
@@ -547,7 +580,7 @@ export const selectRoundWinnerWithProfitSteering = async (input: {
   return pickBiasedWinner({
     options: optionsToUse,
     bets: input.bets,
-    target_human_win_rate: 0.015,
+    target_human_win_rate: steering.target_human_win_rate ?? 0.40,
     min_human_bets_before_bias: 1,
     max_human_payout_per_round: steering.max_allowed_human_payout,
   });
