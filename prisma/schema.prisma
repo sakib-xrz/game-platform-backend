@@ -1734,3 +1734,62 @@ model GamePlayerRiskState {
   @@index([lifetime_net_profit])
   @@map("game_player_risk_states")
 }
+
+enum SeamlessTransferDirection {
+  debit
+  credit
+
+  @@map("seamless_transfer_direction")
+}
+
+enum SeamlessTransferStatus {
+  // debit: host call attempted, bet commit not yet confirmed
+  // credit: queued, waiting to be delivered to the host wallet
+  pending
+  // credit: claimed by a dispatcher and currently being delivered
+  processing
+  // debit: bet committed locally / credit: host acknowledged it
+  completed
+  // debit: host definitively did not take the coins (nothing to give back)
+  voided
+  // debit: host took the coins but the bet never committed -> reversal credit queued
+  reversed
+
+  @@map("seamless_transfer_status")
+}
+
+/// Durable journal of every coin movement sent to a seamless (host) wallet.
+/// Credits are written in the same DB transaction as the settlement/refund that
+/// owes them and delivered asynchronously until the host acknowledges them, so a
+/// payout can never be lost to a crash, timeout or host outage. Debits are
+/// journaled before the host call so an orphaned debit (bet transaction failed
+/// after the host took the coins) is always reversed.
+model SeamlessWalletTransfer {
+  id                 String                    @id @default(cuid())
+  idempotency_key    String                    @unique
+  direction          SeamlessTransferDirection
+  type               String
+  status             SeamlessTransferStatus    @default(pending)
+  platform_app_id    String
+  user_id            String
+  external_user_id   String
+  amount             BigInt
+  game_code          String
+  round_id           String?
+  reference_id       String
+  host_confirmed_at  DateTime?
+  host_tx_id         String?
+  host_balance_after BigInt?
+  attempt_count      Int                       @default(0)
+  next_attempt_at    DateTime                  @default(now())
+  locked_at          DateTime?
+  last_error         String?
+  completed_at       DateTime?
+  created_at         DateTime                  @default(now())
+  updated_at         DateTime                  @updatedAt
+
+  @@index([direction, status, next_attempt_at])
+  @@index([user_id, created_at])
+  @@index([reference_id])
+  @@map("seamless_wallet_transfers")
+}

@@ -14,6 +14,10 @@ import {
 } from '@/modules/wallet/wallet.services';
 import { processSeamlessBetDebit } from '@/modules/platform-integration/seamless-wallet.services';
 import {
+  compensateFailedSeamlessBet,
+  markSeamlessBetCommitted,
+} from '@/modules/platform-integration/seamless-transfer.services';
+import {
   attachUserId,
   isBotUserId,
   isBotUserIdSync,
@@ -507,6 +511,10 @@ const getSnapshot = async (user_id: string) => {
 const placeBetTransaction = async (
   user_id: string,
   payload: PlaceBetBody,
+  // Generated once per request, OUTSIDE the serializable retry loop: the
+  // host-wallet debit idempotencyKey is derived from it, so a retried
+  // transaction re-sends the same key instead of debiting the player again.
+  bet_id: string = randomUUID(),
 ): Promise<BetResponse> => {
   const amount = BigInt(payload.amount);
   const req_hash = requestHash(payload);
@@ -669,7 +677,6 @@ const placeBetTransaction = async (
     }
 
     const bot_bet = isBotUserIdSync(user_id);
-    const bet_id = randomUUID();
     let debited_wallet: {
       id: string;
       balance_before: bigint;
@@ -831,11 +838,17 @@ const placeBet = async (user_id: string, payload: PlaceBetBody) => {
   if (await isBotUserId(user_id)) {
     return placeBetTransaction(user_id, payload);
   }
+  const bet_id = randomUUID();
   try {
-    return await withWalletInitializationRetry(user_id, () =>
-      placeBetTransaction(user_id, payload),
+    const response = await withWalletInitializationRetry(user_id, () =>
+      placeBetTransaction(user_id, payload, bet_id),
     );
+    await markSeamlessBetCommitted(bet_id);
+    return response;
   } catch (error) {
+    // The bet did not commit. If the host wallet already took the coins for
+    // this bet (seamless mode), give them back right away.
+    await compensateFailedSeamlessBet(bet_id);
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'

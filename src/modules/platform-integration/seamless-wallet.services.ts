@@ -8,7 +8,14 @@ import {
   SeamlessAppConfig,
   SeamlessWalletClient,
 } from './seamless-wallet.client';
-import { logger } from '@/utils/logger';
+import {
+  enqueueSeamlessCredit,
+  journalSeamlessDebit,
+  markSeamlessDebitHostConfirmed,
+  markSeamlessDebitRejected,
+  seamlessKeys,
+  type SeamlessCreditType,
+} from './seamless-transfer.services';
 
 export type UserWalletContext = {
   isSeamless: boolean;
@@ -135,20 +142,54 @@ export async function processSeamlessBetDebit(
   const context = await getUserWalletContext(params.userId);
 
   if (context.isSeamless && context.platformApp && context.externalUserId) {
-    // 1. Debit from 3rd-party host app
-    const idempotencyKey = `game-bet:${params.betId}`;
-    const debitResult = await SeamlessWalletClient.debitRemoteBet(
-      context.platformApp,
-      {
-        externalUserId: context.externalUserId,
-        amount: params.amount,
-        idempotencyKey,
-        gameCode: params.gameCode,
-        roundId: params.roundId,
-      },
-    );
+    // 1. Journal the debit BEFORE calling the host (own autocommit statement).
+    //    If the bet transaction later fails, this row is how we find the
+    //    coins the host already took and give them back.
+    //    betId is stable across serializable retries of the bet transaction,
+    //    so every retry re-sends the SAME idempotencyKey (no double debit).
+    const idempotencyKey = seamlessKeys.betDebit(params.betId);
+    await journalSeamlessDebit({
+      idempotency_key: idempotencyKey,
+      platform_app_id: context.platformApp.id,
+      user_id: params.userId,
+      external_user_id: context.externalUserId,
+      amount: params.amount,
+      game_code: params.gameCode,
+      round_id: params.roundId,
+      bet_id: params.betId,
+    });
 
-    // 2. Ensure local wallet and sync balance
+    // 2. Debit from 3rd-party host app
+    let debitResult: { balanceAfter?: bigint; txId?: string };
+    try {
+      debitResult = await SeamlessWalletClient.debitRemoteBet(
+        context.platformApp,
+        {
+          externalUserId: context.externalUserId,
+          amount: params.amount,
+          idempotencyKey,
+          gameCode: params.gameCode,
+          roundId: params.roundId,
+        },
+      );
+    } catch (error) {
+      // 400 INSUFFICIENT_BALANCE / 403 WALLET_FROZEN are definitive refusals.
+      // Anything else (timeout, 5xx) is ambiguous and stays pending for the
+      // reconciler, which asks the host and reverses if the debit landed.
+      if (
+        error instanceof AppError &&
+        (error.statusCode === httpStatus.BAD_REQUEST ||
+          error.statusCode === httpStatus.FORBIDDEN)
+      ) {
+        await markSeamlessDebitRejected(idempotencyKey, error.message).catch(
+          () => undefined,
+        );
+      }
+      throw error;
+    }
+    await markSeamlessDebitHostConfirmed(idempotencyKey, debitResult);
+
+    // 3. Ensure local wallet and sync balance
     const wallet = await ensureWallet(params.userId, tx);
     const balanceBefore = wallet.balance;
     const balanceAfter =
@@ -268,7 +309,50 @@ export async function processSeamlessBetDebit(
 }
 
 /**
- * Handles round payouts for seamless and local wallets.
+ * Queues a host-wallet credit inside the caller's settlement/refund
+ * transaction when the player belongs to a seamless app. No-op for local
+ * wallets and bots. Delivery happens after commit (see seamless-transfer).
+ */
+export async function queueSeamlessCreditIfNeeded(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    amount: bigint;
+    type: SeamlessCreditType;
+    idempotencyKey: string;
+    gameCode: string;
+    roundId: string;
+    referenceId?: string;
+  },
+): Promise<boolean> {
+  if (params.amount <= 0n) return false;
+  const context = await getUserWalletContext(params.userId);
+  if (!context.isSeamless || !context.platformApp || !context.externalUserId) {
+    return false;
+  }
+  await enqueueSeamlessCredit(
+    tx,
+    {
+      platform_app_id: context.platformApp.id,
+      external_user_id: context.externalUserId,
+    },
+    {
+      idempotency_key: params.idempotencyKey,
+      type: params.type,
+      user_id: params.userId,
+      amount: params.amount,
+      game_code: params.gameCode,
+      round_id: params.roundId,
+      reference_id: params.referenceId ?? params.roundId,
+    },
+  );
+  return true;
+}
+
+/**
+ * Credits a round payout to the local (mirror) wallet and, for seamless
+ * players, queues the same payout to the host wallet in the same transaction.
+ * No HTTP happens inside the serializable settlement transaction.
  */
 export async function processSeamlessPayoutCredit(
   tx: Prisma.TransactionClient,
@@ -287,66 +371,16 @@ export async function processSeamlessPayoutCredit(
   walletVersion: number;
   ledgerId: string;
 }> {
-  const context = await getUserWalletContext(params.userId);
+  const idempotencyKey = seamlessKeys.roundPayout(params.roundId, params.userId);
+  const queued = await queueSeamlessCreditIfNeeded(tx, {
+    userId: params.userId,
+    amount: params.amount,
+    type: 'game_payout',
+    idempotencyKey,
+    gameCode: params.gameCode,
+    roundId: params.roundId,
+  });
 
-  if (context.isSeamless && context.platformApp && context.externalUserId) {
-    const idempotencyKey = `game-payout:${params.roundId}:${params.userId}`;
-    const creditResult = await SeamlessWalletClient.creditRemotePayout(
-      context.platformApp,
-      {
-        externalUserId: context.externalUserId,
-        amount: params.amount,
-        idempotencyKey,
-        type: 'game_payout',
-        gameCode: params.gameCode,
-        roundId: params.roundId,
-      },
-    );
-
-    const wallet = await ensureWallet(params.userId, tx);
-    const balanceBefore = wallet.balance;
-    const balanceAfter =
-      creditResult.balanceAfter !== undefined
-        ? creditResult.balanceAfter
-        : balanceBefore + params.amount;
-
-    const updated = await tx.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: balanceAfter,
-        version: { increment: 1 },
-      },
-    });
-
-    const ledger = await tx.walletLedger.create({
-      data: {
-        wallet_id: wallet.id,
-        user_id: params.userId,
-        game_id: params.gameId,
-        type: WalletLedgerType.win_credit,
-        amount: params.amount,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter,
-        reference_type: params.referenceType,
-        reference_id: params.roundId,
-        metadata: {
-          seamless: true,
-          external_tx_id: creditResult.txId,
-          host_app: context.platformApp.app_name,
-        },
-      },
-    });
-
-    return {
-      walletId: wallet.id,
-      balanceBefore,
-      balanceAfter,
-      walletVersion: updated.version,
-      ledgerId: ledger.id,
-    };
-  }
-
-  // Local wallet credit
   const wallet = await ensureWallet(params.userId, tx);
   const updatedWallet = await tx.wallet.update({
     where: { id: wallet.id },
@@ -367,6 +401,9 @@ export async function processSeamlessPayoutCredit(
       balance_after: updatedWallet.balance,
       reference_type: params.referenceType,
       reference_id: params.roundId,
+      ...(queued
+        ? { metadata: { seamless: true, host_credit_key: idempotencyKey } }
+        : {}),
     },
   });
 

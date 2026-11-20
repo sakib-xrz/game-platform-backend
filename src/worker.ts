@@ -24,6 +24,7 @@ import {
 } from '@/workers/greedy-classic-round.worker';
 import { runBotOrchestratorTick } from '@/modules/game-bot/bot-orchestrator';
 import { refreshBotIdentityCache } from '@/modules/game-bot/bot-identity';
+import { runSeamlessTransferTick } from '@/modules/platform-integration/seamless-transfer.services';
 import { logger } from '@/utils/logger';
 
 const GREEDY_LEASE_KEY = 'game-worker:greedy';
@@ -38,6 +39,8 @@ let lucky_77_leader = false;
 let greedy_classic_leader = false;
 let lease_refresh_timer: NodeJS.Timeout | null = null;
 let lease_refresh_task: Promise<void> | null = null;
+let seamless_transfer_timer: NodeJS.Timeout | null = null;
+const SEAMLESS_TRANSFER_POLL_MS = 1000;
 let health_server: http.Server | undefined;
 
 const sleep = (ms: number): Promise<void> =>
@@ -120,6 +123,14 @@ const main = async (): Promise<void> => {
     () => void refreshLeadership(),
     LEASE_REFRESH_MS,
   );
+  // Host-wallet credit delivery + orphaned-debit reconciliation. Runs on every
+  // worker instance (independent of game leases); rows are claimed with
+  // FOR UPDATE SKIP LOCKED so instances never deliver the same row at once.
+  seamless_transfer_timer = setInterval(
+    () => void runSeamlessTransferTick(),
+    SEAMLESS_TRANSFER_POLL_MS,
+  );
+  void runSeamlessTransferTick();
 
   while (!stopping) {
     try {
@@ -186,6 +197,8 @@ const main = async (): Promise<void> => {
 const cleanup = async (): Promise<void> => {
   if (lease_refresh_timer) clearInterval(lease_refresh_timer);
   lease_refresh_timer = null;
+  if (seamless_transfer_timer) clearInterval(seamless_transfer_timer);
+  seamless_transfer_timer = null;
   if (lease_refresh_task) await lease_refresh_task;
 
   try {

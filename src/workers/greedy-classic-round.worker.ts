@@ -7,6 +7,8 @@ import {
   WalletLedgerType,
 } from '@/generated/prisma/client';
 import prisma from '@/lib/prisma';
+import { queueSeamlessCreditIfNeeded } from '@/modules/platform-integration/seamless-wallet.services';
+import { seamlessKeys } from '@/modules/platform-integration/seamless-transfer.services';
 import { redisClient } from '@/infrastructure/redis/redis.client';
 import { ensureWallet } from '@/modules/wallet/wallet.services';
 import type { WalletBalanceUpdatedPayload } from '@/modules/wallet/wallet.types';
@@ -489,6 +491,16 @@ const settleUser = async (round_id: string, user_id: string): Promise<void> => {
             reference_id: round_id,
           },
         });
+        // Seamless players: pay the win into the host wallet. Queued in this
+        // same transaction, delivered after commit, retried until acknowledged.
+        await queueSeamlessCreditIfNeeded(tx, {
+          userId: user_id,
+          amount: total_payout,
+          type: 'game_payout',
+          idempotencyKey: seamlessKeys.roundPayout(round_id, user_id),
+          gameCode: GREEDY_CLASSIC_GAME_CODE,
+          roundId: round_id,
+        });
         await tx.greedyClassicUserPayout.create({
           data: {
             round_id,
@@ -648,6 +660,15 @@ const refundUser = async (round_id: string, user_id: string): Promise<void> => {
         balance_before: wallet.balance, balance_after: updated_wallet.balance,
         reference_type: 'greedy_classic_round_refund', reference_id: round_id,
       },
+    });
+    // Cancelled round: return the stake to the host wallet for seamless players.
+    await queueSeamlessCreditIfNeeded(tx, {
+      userId: user_id,
+      amount: total_bet_amount,
+      type: 'game_refund',
+      idempotencyKey: seamlessKeys.roundRefund(round_id, user_id),
+      gameCode: GREEDY_CLASSIC_GAME_CODE,
+      roundId: round_id,
     });
     await tx.greedyClassicUserRefund.create({
       data: { round_id, user_id, wallet_id: wallet.id, total_bet_amount, wallet_ledger_id: ledger.id },

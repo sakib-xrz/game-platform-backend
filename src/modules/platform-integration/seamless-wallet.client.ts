@@ -31,7 +31,11 @@ export type SeamlessTransactionResponse = {
 };
 
 export type SeamlessLookupResponse = {
-  status: 'FOUND' | 'NOT_FOUND';
+  /**
+   * UNKNOWN = the host could not be asked (network error, 5xx, auth error).
+   * Callers must never treat UNKNOWN as proof that a transaction did not happen.
+   */
+  status: 'FOUND' | 'NOT_FOUND' | 'UNKNOWN';
   type?: 'debit' | 'credit';
   amount?: number | string;
   currency?: string;
@@ -211,10 +215,12 @@ export class SeamlessWalletClient {
 
       const recovery = await this.checkRemoteTransaction(app, params.idempotencyKey);
       if (recovery.status === 'FOUND') {
-        return {
-          balanceAfter: recovery.amount ? BigInt(recovery.amount) : undefined,
-        };
+        // The lookup returns the transaction amount, not the wallet balance.
+        // Leave balanceAfter unknown; the local mirror is re-synced from the host.
+        return {};
       }
+      // NOT_FOUND / UNKNOWN: the debit may still land on the host later. The
+      // caller keeps the journal row pending and the reconciler resolves it.
       throw new AppError(
         httpStatus.GATEWAY_TIMEOUT,
         'Host wallet did not respond to bet debit. Transaction aborted safely.',
@@ -231,6 +237,13 @@ export class SeamlessWalletClient {
 
       if (response.status === 400 && errorJson?.code === 'INSUFFICIENT_BALANCE') {
         throw new AppError(httpStatus.BAD_REQUEST, 'Insufficient wallet balance in host app');
+      }
+
+      // Some hosts answer a replayed idempotencyKey with 409 instead of the
+      // original 200. If the host really holds this debit, accept it.
+      if (response.status === 409) {
+        const replay = await this.checkRemoteTransaction(app, params.idempotencyKey);
+        if (replay.status === 'FOUND') return {};
       }
 
       if (response.status === 403 && errorJson?.code === 'WALLET_FROZEN') {
@@ -271,7 +284,9 @@ export class SeamlessWalletClient {
       gameCode?: string;
       roundId?: string;
     },
+    options: { attempts?: number } = {},
   ): Promise<{ balanceAfter?: bigint; txId?: string }> {
+    const maxAttempts = Math.max(1, options.attempts ?? 3);
     if (!app.wallet_base_url) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
@@ -296,17 +311,20 @@ export class SeamlessWalletClient {
     };
 
     const rawBody = JSON.stringify(bodyPayload);
-    const headers = generateSignedHeaders(
-      app.signing_secret,
-      'POST',
-      pathAndQuery,
-      rawBody,
-      app.app_key || app.package_name,
-    );
 
-    // Credit attempts retry up to 3 times because winnings must never be lost
+    // Short in-request retry. Durable delivery is guaranteed by the
+    // seamless_wallet_transfers journal + dispatcher, not by this loop.
     let lastError: any = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Sign every attempt: a reused nonce/timestamp is rejected by hosts
+      // that enforce replay protection, which would make every retry fail.
+      const headers = generateSignedHeaders(
+        app.signing_secret,
+        'POST',
+        pathAndQuery,
+        rawBody,
+        app.app_key || app.package_name,
+      );
       try {
         const response = await fetchWithTimeout(fullUrl, {
           method: 'POST',
@@ -330,19 +348,14 @@ export class SeamlessWalletClient {
       }
 
       // Small backoff before retrying
-      if (attempt < 3) {
+      if (attempt < maxAttempts) {
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
       }
     }
 
-    logger.error('seamless_credit_failed_all_attempts', {
-      idempotencyKey: params.idempotencyKey,
-      error: lastError?.message,
-    });
-
     throw new AppError(
       httpStatus.BAD_GATEWAY,
-      `Host wallet credit payout failed after 3 attempts: ${lastError?.message}`,
+      `Host wallet credit failed after ${maxAttempts} attempt(s): ${lastError?.message}`,
     );
   }
 
@@ -355,7 +368,7 @@ export class SeamlessWalletClient {
     idempotencyKey: string,
   ): Promise<SeamlessLookupResponse> {
     if (!app.wallet_base_url) {
-      return { status: 'NOT_FOUND' };
+      return { status: 'UNKNOWN', error: 'wallet_base_url is not configured' };
     }
 
     const baseUrl = cleanBaseUrl(app.wallet_base_url);
@@ -410,12 +423,12 @@ export class SeamlessWalletClient {
       }
 
       return {
-        status: 'NOT_FOUND',
+        status: 'UNKNOWN',
         httpStatus: response.status,
         error: `Host rejected transaction lookup: HTTP ${response.status}`,
       };
     } catch (err: any) {
-      return { status: 'NOT_FOUND', error: `Network error: ${err.message}` };
+      return { status: 'UNKNOWN', error: `Network error: ${err.message}` };
     }
   }
 
